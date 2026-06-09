@@ -1,0 +1,54 @@
+{
+  "name": "polycode",
+  "version": "0.1.0",
+  "description": "JavaScript-native multi-agent orchestration framework with a rich terminal GUI.",
+  "type": "module",
+  "bin": {
+    "polycode": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx src/cli.ts",
+    "test": "vitest run test/config.test.ts test/dashboard.test.tsx",
+    "test:e2e": "npm run build && vitest run test/e2e",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm test && npm run test:e2e"
+  },
+  "keywords": [
+    "agents",
+    "ai",
+    "ink",
+    "llm",
+    "multi-agent",
+    "orchestration",
+    "terminal"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "boxen": "^8.0.1",
+    "chalk": "^5.4.1",
+    "commander": "^12.1.0",
+    "ink": "^5.1.0",
+    "ink-select-input": "^6.2.0",
+    "ink-spinner": "^5.0.0",
+    "ink-text-input": "^6.0.0",
+    "react": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/react": "^18.3.18",
+    "ink-testing-library": "^3.0.0",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}
