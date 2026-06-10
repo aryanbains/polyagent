@@ -11,7 +11,8 @@ const DEFAULT_MODELS: Record<Provider, string> = {
 	openai: 'gpt-4o-mini',
 	anthropic: 'claude-3-5-haiku-latest',
 	groq: 'llama-3.1-8b-instant',
-	ollama: 'llama3.1'
+	ollama: 'llama3.1',
+	openrouter: 'deepseek/deepseek-v4-pro'
 };
 
 export class ProviderConfigurationError extends Error {
@@ -39,6 +40,18 @@ export function createLanguageModel(config: PolycodeConfig, agent: AgentDefiniti
 
 	if (config.llm.provider === 'groq') {
 		return createGroq({apiKey})(model);
+	}
+
+	if (config.llm.provider === 'openrouter') {
+		return createOpenAICompatible({
+			name: 'openrouter',
+			baseURL: process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1',
+			apiKey,
+			headers: {
+				'HTTP-Referer': process.env.OPENROUTER_HTTP_REFERER ?? 'https://github.com/polycode',
+				'X-Title': process.env.OPENROUTER_APP_NAME ?? 'Polycode'
+			}
+		})(model);
 	}
 
 	return createOpenAICompatible({

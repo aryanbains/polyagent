@@ -3,7 +3,7 @@ export const COMMAND_NAME = 'polycode';
 export const CONFIG_DIRECTORY_NAME = '.polycode';
 export const CONFIG_FILE_NAME = 'config.json';
 
-export const PROVIDERS = ['openai', 'anthropic', 'groq', 'ollama'] as const;
+export const PROVIDERS = ['openai', 'anthropic', 'groq', 'ollama', 'openrouter'] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export const MEMORY_BACKENDS = ['chroma', 'pinecone', 'skip'] as const;

@@ -104,6 +104,40 @@ describe('runAgentTurn', () => {
 		]);
 	});
 
+	it('passes tool callbacks through the LLM client', async () => {
+		const events: string[] = [];
+		const llmClient: LlmClient = {
+			async *streamText(options: LlmStreamOptions): AsyncIterable<string> {
+				options.onToolStart?.('read_file', {path: 'package.json'});
+				options.onToolFinish?.('read_file', {ok: true, message: 'package contents'}, true);
+				yield 'done';
+			}
+		};
+
+		await runAgentTurn({
+			config,
+			agent: {
+				...agent,
+				memory_enabled: false,
+				tools: ['read_file']
+			},
+			message: 'read package.json',
+			llmClient,
+			toolContext: {
+				workingDirectory: process.cwd(),
+				approvalMode: 'deny'
+			},
+			onToolStart: (toolName) => {
+				events.push(`start:${toolName}`);
+			},
+			onToolFinish: (toolName) => {
+				events.push(`finish:${toolName}`);
+			}
+		});
+
+		expect(events).toEqual(['start:read_file', 'finish:read_file']);
+	});
+
 	it('normalizes provider failures into friendly LLM call errors', async () => {
 		const llmClient = new AiSdkLlmClient();
 

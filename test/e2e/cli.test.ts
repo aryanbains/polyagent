@@ -241,4 +241,40 @@ describe('polycode cli', () => {
 		expect(memoryResult.stdout).toContain('Backend: skip');
 		expect(memoryResult.stdout).toContain('Embeddings: 0');
 	});
+
+	it('runs a task against the first agent with mocked output', async () => {
+		const home = path.join(temporaryRoot, 'home');
+		const workspace = path.join(temporaryRoot, 'workspace');
+		await runCli([
+			'init',
+			'--yes',
+			'--project-name',
+			'Demo',
+			'--working-directory',
+			workspace,
+			'--provider',
+			'openrouter',
+			'--api-key',
+			'test-key',
+			'--memory',
+			'skip'
+		], {
+			POLYCODE_HOME: home
+		});
+		await writeFile(path.join(workspace, 'agents.yaml'), [
+			'agents:',
+			'  - name: researcher',
+			'    role: Research specialist',
+			'    goal: Find accurate information',
+			'    tools: [read_file, list_directory, search_files]'
+		].join('\n'));
+
+		const result = await runCli(['run', 'read package.json'], {
+			POLYCODE_HOME: home,
+			POLYCODE_MOCK_LLM_RESPONSE: 'package.json read'
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stdout).toContain('package.json read');
+	});
 });

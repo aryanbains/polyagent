@@ -2,7 +2,7 @@
 
 Polycode is a JavaScript-native multi-agent orchestration framework with a rich terminal GUI. The goal is to bring the multi-agent workflow ideas common in Python agent frameworks into the Node.js and TypeScript ecosystem, with an installable CLI that feels native to developer terminals.
 
-This repository is currently in **Phase 2** of active development. Phase 1 established the installable CLI and terminal shell. Phase 2 adds agent definitions, validation, model-provider wiring, chat, and persistent memory.
+This repository is currently in **Phase 3** of active development. Phase 1 established the installable CLI and terminal shell. Phase 2 added agent definitions, validation, model-provider wiring, chat, and persistent memory. Phase 3 adds the first tool system for files, commands, and web access.
 
 ## What Works Today
 
@@ -12,6 +12,7 @@ This repository is currently in **Phase 2** of active development. Phase 1 estab
 - `polycode status` prints the current local configuration summary.
 - `polycode validate` validates `agents.yaml`, `agents.yml`, or `agents.json`.
 - `polycode chat <agent-name>` chats with a configured agent.
+- `polycode run "<task>"` runs a one-shot task with tool calls visible in the terminal.
 - `polycode memory` shows memory backend status and embedding count.
 - `polycode --version` prints the installed package version.
 - API keys are not echoed in CLI output and are encrypted before being written to disk.
@@ -71,6 +72,18 @@ Or send one noninteractive message:
 
 ```bash
 polycode chat researcher --message "What did we discuss before?"
+```
+
+Run a task against the first configured agent:
+
+```bash
+polycode run "read my package.json and tell me what dependencies I am using"
+```
+
+Use `--yes` to auto-approve write and command tools during trusted local demos:
+
+```bash
+polycode run --yes "create hello.txt with Hello World"
 ```
 
 Useful keyboard controls in the dashboard:
@@ -160,7 +173,35 @@ Polycode uses the Vercel AI SDK provider adapters:
 - OpenAI via `@ai-sdk/openai`
 - Anthropic via `@ai-sdk/anthropic`
 - Groq via `@ai-sdk/groq`
+- OpenRouter via `@ai-sdk/openai-compatible`
 - Ollama via `@ai-sdk/openai-compatible` and `OLLAMA_BASE_URL`, defaulting to `http://localhost:11434/v1`
+
+For OpenRouter, choose `openrouter` during onboarding and use OpenRouter model IDs in `agents.yaml`, for example:
+
+```yaml
+agents:
+  - name: researcher
+    role: Research specialist
+    goal: Find accurate information
+    model: deepseek/deepseek-v4-pro
+    memory_enabled: true
+    tools: [read_file, list_directory, search_files, web_search, fetch_url]
+```
+
+## Tools
+
+Agents can call tools listed in their `tools` array. Built-in tools:
+
+- `read_file(path)`
+- `write_file(path, content)`
+- `append_to_file(path, content)`
+- `list_directory(path, recursive?)`
+- `search_files(pattern, directory?)`
+- `execute_command(command, working_dir?, timeout_ms?)`
+- `web_search(query, max_results?)`
+- `fetch_url(url)`
+
+File and command tools are workspace-scoped. `write_file`, `append_to_file`, and `execute_command` show a preview and require confirmation unless you pass `--yes` or set `POLYCODE_TOOL_APPROVAL=allow`.
 
 ## Development
 
@@ -176,7 +217,7 @@ npm run check
 
 ## Roadmap
 
-Phase 3 will introduce tools and safe file operations. Phase 4 is the multi-agent orchestration layer. Phase 5 is plugin support, docs polish, and publish readiness.
+Phase 4 is the multi-agent orchestration layer. Phase 5 is plugin support, docs polish, and publish readiness.
 
 ## Status
 

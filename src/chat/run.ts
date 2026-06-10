@@ -1,9 +1,11 @@
-import {streamText, type ModelMessage} from 'ai';
+import {stepCountIs, streamText, type ModelMessage, type ToolSet} from 'ai';
 import type {AgentDefinition} from '../agents/schema.js';
 import type {PolycodeConfig} from '../domain.js';
 import {createLanguageModel} from '../llm/providers.js';
 import {createMemoryStore} from '../memory/factory.js';
 import type {MemoryStore} from '../memory/types.js';
+import type {ToolContext} from '../tools/types.js';
+import {createToolSet} from '../tools/registry.js';
 import {buildSystemPrompt} from './system-prompt.js';
 
 export type LlmStreamOptions = {
@@ -11,6 +13,9 @@ export type LlmStreamOptions = {
 	agent: AgentDefinition;
 	messages: ModelMessage[];
 	system: string;
+	tools?: ToolSet;
+	onToolStart?: (toolName: string, input: unknown) => void;
+	onToolFinish?: (toolName: string, output: unknown, success: boolean) => void;
 };
 
 export interface LlmClient {
@@ -61,7 +66,15 @@ export class AiSdkLlmClient implements LlmClient {
 			const result = streamText({
 				model: createLanguageModel(options.config, options.agent),
 				system: options.system,
-				messages: options.messages
+				messages: options.messages,
+				tools: options.tools,
+				stopWhen: stepCountIs(6),
+				experimental_onToolCallStart: (event) => {
+					options.onToolStart?.(event.toolCall.toolName, event.toolCall.input);
+				},
+				experimental_onToolCallFinish: (event) => {
+					options.onToolFinish?.(event.toolCall.toolName, event.success ? event.output : event.error, event.success);
+				}
 			});
 
 			for await (const chunk of result.textStream) {
@@ -80,7 +93,10 @@ export type RunAgentTurnOptions = {
 	conversation?: ModelMessage[];
 	memoryStore?: MemoryStore;
 	llmClient?: LlmClient;
+	toolContext?: ToolContext;
 	onToken?: (token: string) => void;
+	onToolStart?: (toolName: string, input: unknown) => void;
+	onToolFinish?: (toolName: string, output: unknown, success: boolean) => void;
 };
 
 export async function runAgentTurn(options: RunAgentTurnOptions): Promise<string> {
@@ -93,13 +109,17 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<string
 		...conversation,
 		{role: 'user', content: options.message}
 	];
+	const tools = options.toolContext === undefined ? undefined : createToolSet(options.agent, options.toolContext);
 	let response = '';
 
 	for await (const token of llmClient.streamText({
 		config: options.config,
 		agent: options.agent,
 		messages,
-		system
+		system,
+		tools,
+		onToolStart: options.onToolStart,
+		onToolFinish: options.onToolFinish
 	})) {
 		response += token;
 		options.onToken?.(token);

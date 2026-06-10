@@ -14,6 +14,8 @@ import {runAgentTurn} from './chat/run.js';
 import {APP_NAME, COMMAND_NAME, MEMORY_BACKENDS, PROVIDERS, type InitOptions, type MemoryBackend, type Provider} from './domain.js';
 import {createMemoryStore, getMemoryStats} from './memory/factory.js';
 import {ChromaUnavailableError} from './memory/chroma-store.js';
+import {summarizeToolOutput} from './tools/registry.js';
+import type {ToolApprovalMode} from './tools/types.js';
 import {Dashboard} from './ui/Dashboard.js';
 import {InitWizard} from './ui/InitWizard.js';
 import {getConfigPath, initializeConfig, loadConfig} from './config/store.js';
@@ -58,12 +60,35 @@ type ValidateCommandOptions = {
 
 type ChatCommandOptions = {
 	message?: string;
+	yes?: boolean;
 };
 
 type MemoryCommandOptions = {
 	agent?: string;
 	clear?: boolean;
 };
+
+type RunCommandOptions = {
+	agent?: string;
+	yes?: boolean;
+};
+
+function getApprovalMode(yes?: boolean): ToolApprovalMode {
+	if (yes === true) {
+		return 'allow';
+	}
+
+	return 'prompt';
+}
+
+function printToolStart(toolName: string, input: unknown): void {
+	console.log(chalk.cyan(`-> ${toolName}(${JSON.stringify(input)})`));
+}
+
+function printToolFinish(toolName: string, output: unknown, success: boolean): void {
+	const color = success ? chalk.green : chalk.red;
+	console.log(color(`<-${success ? '' : ' failed'} ${toolName}: ${summarizeToolOutput(output)}`));
+}
 
 async function runInit(options: InitCommandOptions): Promise<void> {
 	if (options.yes) {
@@ -135,6 +160,15 @@ async function runChat(agentName: string, options: ChatCommandOptions): Promise<
 			agent,
 			message: options.message,
 			conversation,
+			toolContext: {
+				workingDirectory: config.project.workingDirectory,
+				approvalMode: getApprovalMode(options.yes),
+				onPreview: (preview) => {
+					console.log(preview);
+				}
+			},
+			onToolStart: printToolStart,
+			onToolFinish: printToolFinish,
 			onToken: (token) => {
 				process.stdout.write(token);
 			}
@@ -168,6 +202,15 @@ async function runChat(agentName: string, options: ChatCommandOptions): Promise<
 				agent,
 				message,
 				conversation,
+				toolContext: {
+					workingDirectory: config.project.workingDirectory,
+					approvalMode: getApprovalMode(options.yes),
+					onPreview: (preview) => {
+						console.log(preview);
+					}
+				},
+				onToolStart: printToolStart,
+				onToolFinish: printToolFinish,
 				onToken: (token) => {
 					process.stdout.write(token);
 				}
@@ -177,6 +220,41 @@ async function runChat(agentName: string, options: ChatCommandOptions): Promise<
 	} finally {
 		input.close();
 	}
+}
+
+async function runTask(task: string, options: RunCommandOptions): Promise<void> {
+	const config = await loadConfig();
+
+	if (config === null) {
+		throw new Error(`${APP_NAME} is not configured yet. Run ${COMMAND_NAME} init first.`);
+	}
+
+	const {agents} = await loadAgents({workingDirectory: config.project.workingDirectory, requireFile: true});
+	const agent = options.agent === undefined ? agents[0] : findAgent(agents, options.agent);
+
+	if (agent === undefined) {
+		throw new Error('No agents are configured. Create agents.yaml and run polycode validate.');
+	}
+
+	await runAgentTurn({
+		config,
+		agent,
+		message: task,
+		conversation: [],
+		toolContext: {
+			workingDirectory: config.project.workingDirectory,
+			approvalMode: getApprovalMode(options.yes),
+			onPreview: (preview) => {
+				console.log(preview);
+			}
+		},
+		onToolStart: printToolStart,
+		onToolFinish: printToolFinish,
+		onToken: (token) => {
+			process.stdout.write(token);
+		}
+	});
+	process.stdout.write('\n');
 }
 
 async function runMemory(options: MemoryCommandOptions): Promise<void> {
@@ -276,8 +354,19 @@ export function buildProgram(): Command {
 		.description('Chat with a configured agent.')
 		.argument('<agent-name>', 'Agent name from agents.yaml.')
 		.option('-m, --message <message>', 'Send one message and print the streamed response.')
+		.option('-y, --yes', 'Auto-approve tool calls that require confirmation.')
 		.action(async (agentName: string, options: ChatCommandOptions) => {
 			await runChat(agentName, options);
+		});
+
+	program
+		.command('run')
+		.description('Run a task against the first configured agent, with streaming output and visible tool calls.')
+		.argument('<task>', 'Task to run.')
+		.option('--agent <name>', 'Run the task with a specific agent instead of the first one.')
+		.option('-y, --yes', 'Auto-approve write and command tool calls.')
+		.action(async (task: string, options: RunCommandOptions) => {
+			await runTask(task, options);
 		});
 
 	program
