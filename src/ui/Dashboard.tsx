@@ -1,8 +1,10 @@
+import path from 'node:path';
 import React, {useEffect, useState} from 'react';
 import {Box, Text, useApp, useInput, useStdin} from 'ink';
 import type {AgentDefinition} from '../agents/schema.js';
 import {APP_NAME, COMMAND_NAME, type PolycodeConfig} from '../domain.js';
 import type {MemoryStats} from '../memory/types.js';
+import {getConfigPath} from '../config/store.js';
 import {Panel} from './Panel.js';
 
 type DashboardProps = {
@@ -112,8 +114,12 @@ export function Dashboard({agents = [], agentsError = null, config, memoryStats,
 	}, [exit, inputEnabled]);
 
 	const projectName = config?.project.name ?? 'No project configured';
-	const workingDirectory = config?.project.workingDirectory ?? `Run ${COMMAND_NAME} init`;
+	const workingDirectory = config?.project.workingDirectory ?? process.cwd();
+	const expectedAgentsFile = config === null ? null : path.join(config.project.workingDirectory, 'agents.yaml');
 	const selectedAgent = agents[selectedAgentIndex];
+	const isSetupMissing = config === null;
+	const isAgentsMissing = config !== null && agentsError === null && agents.length === 0;
+	const status = isSetupMissing ? 'Setup needed' : agentsError === null && !isAgentsMissing ? 'Ready' : 'Needs attention';
 	const panelHeight = Math.max(rows - 3, 12);
 	const sidebarWidth = Math.min(Math.max(Math.floor(columns * 0.28), 24), 34);
 	const memoryWidth = memoryVisible ? Math.min(Math.max(Math.floor(columns * 0.25), 24), 34) : undefined;
@@ -129,10 +135,13 @@ export function Dashboard({agents = [], agentsError = null, config, memoryStats,
 
 			<Box flexDirection="row" height={panelHeight}>
 				<Panel title="Agents" active={activePanel === 'agents'} width={sidebarWidth}>
-					{agentsError !== null && <Text color="red">Config error</Text>}
-					{agentsError !== null && <Text dimColor>{agentsError}</Text>}
-					{agentsError === null && agents.length === 0 && <Text dimColor>No agents configured</Text>}
-					{agentsError === null && agents.map((agent, index) => (
+					{isSetupMissing && <Text color="yellow">Setup needed</Text>}
+					{isSetupMissing && <Text dimColor>Run {COMMAND_NAME} init</Text>}
+					{!isSetupMissing && agentsError !== null && <Text color="red">Config error</Text>}
+					{!isSetupMissing && agentsError !== null && <Text dimColor>{agentsError}</Text>}
+					{!isSetupMissing && isAgentsMissing && <Text color="yellow">No agents found</Text>}
+					{!isSetupMissing && isAgentsMissing && <Text dimColor>Expected agents.yaml</Text>}
+					{!isSetupMissing && agentsError === null && agents.map((agent, index) => (
 						<Text key={agent.name} color={index === selectedAgentIndex ? 'cyan' : undefined}>
 							{index === selectedAgentIndex ? '>' : ' '} {agent.name} idle
 						</Text>
@@ -140,24 +149,66 @@ export function Dashboard({agents = [], agentsError = null, config, memoryStats,
 				</Panel>
 
 				<Panel title="Workspace" active={activePanel === 'main'}>
-					<Text bold>{selectedAgent === undefined ? 'No agents configured' : selectedAgent.name}</Text>
-					<Box marginTop={1} flexDirection="column">
-						<Text>Working directory</Text>
-						<Text dimColor>{workingDirectory}</Text>
-					</Box>
-					<Box marginTop={1} flexDirection="column">
-						<Text>Provider</Text>
-						<Text dimColor>{config?.llm.provider ?? 'Not configured'}</Text>
-					</Box>
-					{selectedAgent !== undefined && (
-						<Box marginTop={1} flexDirection="column">
-							<Text>Role</Text>
-							<Text dimColor>{selectedAgent.role}</Text>
-							<Text>Goal</Text>
-							<Text dimColor>{selectedAgent.goal}</Text>
-							<Text>Memory</Text>
-							<Text dimColor>{selectedAgent.memory_enabled ? 'enabled' : 'disabled'}</Text>
+					{isSetupMissing && (
+						<Box flexDirection="column">
+							<Text bold>Polycode needs setup</Text>
+							<Box marginTop={1} flexDirection="column">
+								<Text>Run</Text>
+								<Text color="cyan">{COMMAND_NAME} init</Text>
+							</Box>
+							<Box marginTop={1} flexDirection="column">
+								<Text>After init</Text>
+								<Text dimColor>{COMMAND_NAME} validate</Text>
+								<Text dimColor>{COMMAND_NAME} chat researcher</Text>
+								<Text dimColor>{COMMAND_NAME} run "read package.json and summarize this project"</Text>
+							</Box>
+							<Box marginTop={1} flexDirection="column">
+								<Text>Config path checked</Text>
+								<Text dimColor>{getConfigPath()}</Text>
+							</Box>
+							<Text dimColor>Already initialized? Check POLYCODE_HOME and that this terminal is using the same user.</Text>
 						</Box>
+					)}
+					{isAgentsMissing && expectedAgentsFile !== null && (
+						<Box flexDirection="column">
+							<Text bold>No agents.yaml found</Text>
+							<Box marginTop={1} flexDirection="column">
+								<Text>Working directory</Text>
+								<Text dimColor>{workingDirectory}</Text>
+							</Box>
+							<Box marginTop={1} flexDirection="column">
+								<Text>Expected file</Text>
+								<Text dimColor>{expectedAgentsFile}</Text>
+							</Box>
+							<Box marginTop={1} flexDirection="column">
+								<Text>Run</Text>
+								<Text color="cyan">{COMMAND_NAME} init</Text>
+								<Text dimColor>or create agents.yaml in the working directory, then run {COMMAND_NAME} validate.</Text>
+							</Box>
+						</Box>
+					)}
+					{!isSetupMissing && !isAgentsMissing && (
+						<>
+							<Text bold>{selectedAgent === undefined ? 'No agents configured' : selectedAgent.name}</Text>
+							<Box marginTop={1} flexDirection="column">
+								<Text>Working directory</Text>
+								<Text dimColor>{workingDirectory}</Text>
+							</Box>
+							<Box marginTop={1} flexDirection="column">
+								<Text>Provider</Text>
+								<Text dimColor>{config?.llm.provider ?? 'Not configured'}</Text>
+							</Box>
+							{selectedAgent !== undefined && (
+								<Box marginTop={1} flexDirection="column">
+									<Text>Role</Text>
+									<Text dimColor>{selectedAgent.role}</Text>
+									<Text>Goal</Text>
+									<Text dimColor>{selectedAgent.goal}</Text>
+									<Text>Memory</Text>
+									<Text dimColor>{selectedAgent.memory_enabled ? 'enabled' : 'disabled'}</Text>
+								</Box>
+							)}
+						</>
 					)}
 					{helpVisible && (
 						<Box marginTop={2} borderStyle="single" borderColor="yellow" paddingX={1} flexDirection="column">
@@ -187,7 +238,7 @@ export function Dashboard({agents = [], agentsError = null, config, memoryStats,
 
 			<Box justifyContent="space-between" paddingX={1}>
 				<Text inverse>q quit | ? help | m memory | arrows navigate</Text>
-				<Text inverse>Ready</Text>
+				<Text inverse>{status}</Text>
 			</Box>
 		</Box>
 	);

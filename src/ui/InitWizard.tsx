@@ -4,7 +4,7 @@ import {Box, Text, useApp, useInput} from 'ink';
 import SelectInput from 'ink-select-input';
 import Spinner from 'ink-spinner';
 import TextInput from 'ink-text-input';
-import {APP_NAME, MEMORY_BACKENDS, PROVIDERS, type InitOptions, type MemoryBackend, type Provider} from '../domain.js';
+import {APP_NAME, COMMAND_NAME, MEMORY_BACKENDS, PROVIDERS, type InitOptions, type MemoryBackend, type Provider} from '../domain.js';
 import {initializeConfig} from '../config/store.js';
 
 type WizardStep = 'projectName' | 'workingDirectory' | 'provider' | 'apiKey' | 'memory' | 'saving' | 'done' | 'error';
@@ -34,6 +34,8 @@ export function InitWizard(): JSX.Element {
 	const [apiKey, setApiKey] = useState('');
 	const [memoryBackend, setMemoryBackend] = useState<MemoryBackend>('skip');
 	const [configPath, setConfigPath] = useState('');
+	const [agentsFilePath, setAgentsFilePath] = useState('');
+	const [agentsFileCreated, setAgentsFileCreated] = useState(false);
 	const [error, setError] = useState('');
 
 	const readyToSave = step === 'saving';
@@ -54,6 +56,8 @@ export function InitWizard(): JSX.Element {
 		initializeConfig(initOptions)
 			.then((result) => {
 				setConfigPath(result.configPath);
+				setAgentsFilePath(result.agentsFile.filePath);
+				setAgentsFileCreated(result.agentsFile.created);
 				setStep('done');
 			})
 			.catch((caughtError: unknown) => {
@@ -69,15 +73,15 @@ export function InitWizard(): JSX.Element {
 
 		const timeout = setTimeout(() => {
 			exit();
-		}, 900);
+		}, 6000);
 
 		return () => {
 			clearTimeout(timeout);
 		};
 	}, [exit, step]);
 
-	useInput((input) => {
-		if (input === 'q' && (step === 'done' || step === 'error')) {
+	useInput((input, key) => {
+		if ((input === 'q' || key.return) && (step === 'done' || step === 'error')) {
 			exit();
 		}
 	});
@@ -166,7 +170,18 @@ export function InitWizard(): JSX.Element {
 				{step === 'done' && (
 					<Box flexDirection="column">
 						<Text color="green">Configuration saved.</Text>
+						<Text>Config</Text>
 						<Text dimColor>{configPath}</Text>
+						<Text>Agents</Text>
+						<Text dimColor>{agentsFileCreated ? 'Created' : 'Using existing'} {agentsFilePath}</Text>
+						<Box marginTop={1} flexDirection="column">
+							<Text bold>Next steps</Text>
+							<Text>1. {COMMAND_NAME} validate</Text>
+							<Text>2. {COMMAND_NAME}</Text>
+							<Text>3. {COMMAND_NAME} chat researcher</Text>
+							<Text>4. {COMMAND_NAME} run "read package.json and summarize this project"</Text>
+						</Box>
+						<Text dimColor>Press Enter to close, or wait a few seconds.</Text>
 					</Box>
 				)}
 

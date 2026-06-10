@@ -8,6 +8,7 @@ This repository is currently in **Phase 3** of active development. Phase 1 estab
 
 - `polycode init` opens an interactive onboarding wizard.
 - `polycode init --yes ...` supports scripted setup for tests and demos.
+- `polycode init` creates a starter `agents.yaml` in the configured working directory when one does not already exist.
 - `polycode` launches the terminal dashboard.
 - `polycode status` prints the current local configuration summary.
 - `polycode validate` validates `agents.yaml`, `agents.yml`, or `agents.json`.
@@ -34,32 +35,41 @@ Run the onboarding wizard:
 polycode init
 ```
 
+`init` saves your machine config and creates a starter `agents.yaml` with a `researcher` agent. Validate that project agent file:
+
+```bash
+polycode validate
+```
+
 Then launch the dashboard:
 
 ```bash
 polycode
 ```
 
-Create an `agents.yaml` in your configured working directory:
+The default CLI flow is:
+
+```bash
+polycode init
+polycode validate
+polycode
+polycode chat researcher
+polycode run "read package.json and summarize this project"
+```
+
+Edit the generated `agents.yaml` in your configured working directory when you want custom agents:
 
 ```yaml
 agents:
   - name: researcher
-    role: Research specialist that gathers and summarizes information
-    goal: Find accurate, relevant information for any query
-    model: gpt-4o-mini
+    role: Project-aware coding assistant that can inspect files and answer questions
+    goal: Help the user understand and change this project accurately
     memory_enabled: true
-    tools: [web_search, file_read]
+    tools: [read_file, list_directory, search_files, web_search, fetch_url]
   - name: writer
     role: Content writer that produces clear, structured documents
     goal: Transform research into readable content
     memory_enabled: true
-```
-
-Validate it:
-
-```bash
-polycode validate
 ```
 
 Chat with an agent:

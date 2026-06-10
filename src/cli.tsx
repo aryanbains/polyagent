@@ -73,6 +73,15 @@ type RunCommandOptions = {
 	yes?: boolean;
 };
 
+function printNextSteps(agentName = 'researcher'): void {
+	console.log('');
+	console.log(chalk.bold('Next steps'));
+	console.log(`1. ${chalk.cyan(`${COMMAND_NAME} validate`)} - check your agents.yaml`);
+	console.log(`2. ${chalk.cyan(COMMAND_NAME)} - open the dashboard`);
+	console.log(`3. ${chalk.cyan(`${COMMAND_NAME} chat ${agentName}`)} - start an interactive agent session`);
+	console.log(`4. ${chalk.cyan(`${COMMAND_NAME} run "read package.json and summarize this project"`)} - run a one-shot task`);
+}
+
 function getApprovalMode(yes?: boolean): ToolApprovalMode {
 	if (yes === true) {
 		return 'allow';
@@ -101,14 +110,16 @@ async function runInit(options: InitCommandOptions): Promise<void> {
 			apiKey: options.apiKey ?? '',
 			memoryBackend
 		};
-		const {config, configPath} = await initializeConfig(initOptions);
+		const {config, configPath, agentsFile} = await initializeConfig(initOptions);
 
 		console.log(chalk.green(`${APP_NAME} configured.`));
 		console.log(`Project: ${config.project.name}`);
 		console.log(`Working directory: ${config.project.workingDirectory}`);
 		console.log(`Provider: ${config.llm.provider}`);
 		console.log(`Memory: ${config.memory.backend}`);
+		console.log(`Agents: ${agentsFile.created ? 'Created' : 'Using existing'} ${agentsFile.filePath}`);
 		console.log(`Config: ${configPath}`);
+		printNextSteps();
 		return;
 	}
 
@@ -118,9 +129,8 @@ async function runInit(options: InitCommandOptions): Promise<void> {
 
 async function runDashboard(): Promise<void> {
 	const config = await loadConfig();
-	const workingDirectory = config?.project.workingDirectory ?? process.cwd();
 	let agentsError: string | null = null;
-	const agents = await loadAgents({workingDirectory}).then((result) => result.agents).catch((error: unknown) => {
+	const agents = config === null ? [] : await loadAgents({workingDirectory: config.project.workingDirectory}).then((result) => result.agents).catch((error: unknown) => {
 		agentsError = error instanceof Error ? error.message : String(error);
 		return [];
 	});
@@ -291,7 +301,11 @@ async function runStatus(): Promise<void> {
 	const config = await loadConfig();
 
 	if (config === null) {
-		console.log(boxen(`${APP_NAME} is not configured yet.\nRun ${chalk.cyan(`${COMMAND_NAME} init`)} to start.`, {
+		console.log(boxen([
+			`${APP_NAME} is not configured yet.`,
+			`Run ${chalk.cyan(`${COMMAND_NAME} init`)} to start.`,
+			`Config path checked: ${getConfigPath()}`
+		].join('\n'), {
 			padding: 1,
 			borderColor: 'yellow',
 			borderStyle: 'round'

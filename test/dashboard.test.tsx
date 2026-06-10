@@ -37,6 +37,24 @@ describe('Dashboard', () => {
 		cleanup();
 	});
 
+	it('shows first-run guidance when no config exists', () => {
+		const {lastFrame} = render(<Dashboard agents={[]} config={null} version="0.1.0" />);
+
+		expect(lastFrame()).toContain('Polycode needs setup');
+		expect(lastFrame()).toContain('polycode init');
+		expect(lastFrame()).toContain('Config path checked');
+		expect(lastFrame()).toContain('Setup needed');
+	});
+
+	it('shows agents.yaml guidance when config exists without agents', () => {
+		const {lastFrame} = render(<Dashboard agents={[]} config={config} version="0.1.0" />);
+
+		expect(lastFrame()).toContain('No agents.yaml found');
+		expect(lastFrame()).toContain('Expected file');
+		expect(lastFrame()).toContain('agents.yaml');
+		expect(lastFrame()).toContain('Needs attention');
+	});
+
 	it('renders the Phase 2 terminal shell with configured agents', () => {
 		const {lastFrame} = render(<Dashboard agents={agents} config={config} memoryStats={{
 			backend: 'local',

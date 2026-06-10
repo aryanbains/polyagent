@@ -70,13 +70,22 @@ describe('polycode cli', () => {
 		});
 
 		const rawConfig = await readFile(path.join(home, 'config.json'), 'utf8');
+		const starterAgents = await readFile(path.join(workspace, 'agents.yaml'), 'utf8');
+		const validateResult = await runCli(['validate'], {
+			POLYCODE_HOME: home
+		});
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout).toContain('Polycode configured.');
+		expect(result.stdout).toContain('Agents: Created');
+		expect(result.stdout).toContain('polycode validate');
 		expect(result.stdout).not.toContain(secret);
 		expect(result.stderr).not.toContain(secret);
 		expect(rawConfig).not.toContain(secret);
 		expect(rawConfig).toContain('"provider": "openai"');
+		expect(starterAgents).toContain('name: researcher');
+		expect(validateResult.exitCode).toBe(0);
+		expect(validateResult.stdout).toContain('Agents: 1');
 	});
 
 	it('validates agents.yaml and chats with a mocked LLM', async () => {

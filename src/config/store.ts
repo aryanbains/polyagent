@@ -1,6 +1,7 @@
 import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import {scaffoldAgentsFile, type ScaffoldAgentsResult} from '../agents/scaffold.js';
 import {CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME, type InitOptions, type PolycodeConfig} from '../domain.js';
 import {decryptSecret, encryptSecret} from './crypto.js';
 
@@ -79,8 +80,15 @@ export function getConfigApiKey(config: PolycodeConfig): string {
 	}
 }
 
-export async function initializeConfig(options: InitOptions): Promise<{config: PolycodeConfig; configPath: string}> {
+export type InitializeConfigResult = {
+	config: PolycodeConfig;
+	configPath: string;
+	agentsFile: ScaffoldAgentsResult;
+};
+
+export async function initializeConfig(options: InitOptions): Promise<InitializeConfigResult> {
 	const config = await createConfig(options);
 	const configPath = await saveConfig(config);
-	return {config, configPath};
+	const agentsFile = await scaffoldAgentsFile(config.project.workingDirectory);
+	return {config, configPath, agentsFile};
 }

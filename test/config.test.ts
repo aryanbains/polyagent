@@ -1,4 +1,4 @@
-import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
+import {mkdir, mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
@@ -27,7 +27,7 @@ afterEach(async () => {
 describe('config store', () => {
 	it('writes config outside the project and encrypts API keys', async () => {
 		const secret = 'phase-one-secret';
-		const {configPath} = await initializeConfig({
+		const {agentsFile, configPath} = await initializeConfig({
 			projectName: 'Demo',
 			workingDirectory: temporaryHome,
 			provider: 'openai',
@@ -39,9 +39,33 @@ describe('config store', () => {
 		const loadedConfig = await loadConfig();
 
 		expect(configPath).toBe(getConfigPath());
+		expect(agentsFile.created).toBe(true);
+		expect(agentsFile.filePath).toBe(path.join(temporaryHome, 'agents.yaml'));
 		expect(rawConfig).not.toContain(secret);
+		await expect(readFile(agentsFile.filePath, 'utf8')).resolves.toContain('name: researcher');
 		expect(loadedConfig?.llm.provider).toBe('openai');
 		expect(decryptSecret(loadedConfig?.llm.apiKey ?? null)).toBe(secret);
+	});
+
+	it('does not overwrite an existing agents.yaml during init', async () => {
+		const workspace = path.join(temporaryHome, 'workspace');
+		const agentsFilePath = path.join(workspace, 'agents.yaml');
+		await mkdir(workspace, {recursive: true});
+		await writeFile(agentsFilePath, 'agents:\n  - name: custom\n    role: Custom\n    goal: Keep me\n');
+
+		const {agentsFile} = await initializeConfig({
+			projectName: 'Demo',
+			workingDirectory: workspace,
+			provider: 'openai',
+			apiKey: 'secret',
+			memoryBackend: 'skip'
+		});
+
+		expect(agentsFile).toEqual({
+			filePath: agentsFilePath,
+			created: false
+		});
+		await expect(readFile(agentsFilePath, 'utf8')).resolves.toContain('name: custom');
 	});
 
 	it('shows a friendly error when an API key cannot be decrypted', async () => {
