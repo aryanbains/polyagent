@@ -16,7 +16,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/cli.tsx",
-    "test": "vitest run test/config.test.ts test/cli.test.ts test/dashboard.test.tsx",
+    "test": "vitest run test/config.test.ts test/cli.test.ts test/agents.test.ts test/chat.test.ts test/memory.test.ts test/dashboard.test.tsx",
     "test:e2e": "npm run build && vitest run test/e2e",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test && npm run test:e2e"
@@ -33,16 +33,26 @@
   "author": "Aryan",
   "license": "MIT",
   "dependencies": {
+    "@ai-sdk/anthropic": "^3.0.82",
+    "@ai-sdk/groq": "^3.0.39",
+    "@ai-sdk/openai": "^3.0.69",
+    "@ai-sdk/openai-compatible": "^2.0.48",
+    "@xenova/transformers": "^2.17.2",
+    "ai": "^6.0.199",
     "boxen": "^8.0.1",
     "chalk": "^5.4.1",
+    "chromadb": "^3.4.3",
     "commander": "^12.1.0",
     "ink": "^5.1.0",
     "ink-select-input": "^6.2.0",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
-    "react": "^18.3.1"
+    "js-yaml": "^4.2.0",
+    "react": "^18.3.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.5",
     "@types/react": "^18.3.18",
     "ink-testing-library": "^3.0.0",

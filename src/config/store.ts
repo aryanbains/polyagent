@@ -71,6 +71,14 @@ export async function loadConfig(): Promise<PolycodeConfig | null> {
 	}
 }
 
+export function getConfigApiKey(config: PolycodeConfig): string {
+	try {
+		return decryptSecret(config.llm.apiKey);
+	} catch {
+		throw new ConfigDecryptionError();
+	}
+}
+
 export async function initializeConfig(options: InitOptions): Promise<{config: PolycodeConfig; configPath: string}> {
 	const config = await createConfig(options);
 	const configPath = await saveConfig(config);

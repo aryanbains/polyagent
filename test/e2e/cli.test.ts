@@ -1,4 +1,4 @@
-import {mkdtemp, readFile, rm} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -77,5 +77,123 @@ describe('polycode cli', () => {
 		expect(result.stderr).not.toContain(secret);
 		expect(rawConfig).not.toContain(secret);
 		expect(rawConfig).toContain('"provider": "openai"');
+	});
+
+	it('validates agents.yaml and chats with a mocked LLM', async () => {
+		const home = path.join(temporaryRoot, 'home');
+		const workspace = path.join(temporaryRoot, 'workspace');
+		await runCli([
+			'init',
+			'--yes',
+			'--project-name',
+			'Demo',
+			'--working-directory',
+			workspace,
+			'--provider',
+			'openai',
+			'--api-key',
+			'test-key',
+			'--memory',
+			'chroma'
+		], {
+			POLYCODE_HOME: home
+		});
+		await writeFile(path.join(workspace, 'agents.yaml'), [
+			'agents:',
+			'  - name: researcher',
+			'    role: Research specialist',
+			'    goal: Find accurate information',
+			'    memory_enabled: true',
+			'    tools: [web_search, file_read]'
+		].join('\n'));
+
+		const validateResult = await runCli(['validate'], {
+			POLYCODE_HOME: home
+		});
+		const chatResult = await runCli(['chat', 'researcher', '--message', 'remember Vitest'], {
+			POLYCODE_HOME: home,
+			POLYCODE_MEMORY_DRIVER: 'local',
+			POLYCODE_MOCK_LLM_RESPONSE: 'Vitest remembered.'
+		});
+		const memoryResult = await runCli(['memory'], {
+			POLYCODE_HOME: home,
+			POLYCODE_MEMORY_DRIVER: 'local'
+		});
+
+		expect(validateResult.exitCode).toBe(0);
+		expect(validateResult.stdout).toContain('Agents: 1');
+		expect(chatResult.exitCode).toBe(0);
+		expect(chatResult.stdout).toContain('Vitest remembered.');
+		expect(memoryResult.exitCode).toBe(0);
+		expect(memoryResult.stdout).toContain('Embeddings: 1');
+	});
+
+	it('fails invalid agents.yaml with readable validation output', async () => {
+		const home = path.join(temporaryRoot, 'home');
+		const workspace = path.join(temporaryRoot, 'workspace');
+		await runCli([
+			'init',
+			'--yes',
+			'--project-name',
+			'Demo',
+			'--working-directory',
+			workspace,
+			'--provider',
+			'openai',
+			'--api-key',
+			'test-key',
+			'--memory',
+			'skip'
+		], {
+			POLYCODE_HOME: home
+		});
+		await writeFile(path.join(workspace, 'agents.yaml'), [
+			'agents:',
+			'  - name: bad agent',
+			'    goal: Missing role'
+		].join('\n'));
+
+		const result = await runCli(['validate'], {
+			POLYCODE_HOME: home
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toContain('agents.0.role');
+	});
+
+	it('shows a friendly error when ChromaDB is unreachable', async () => {
+		const home = path.join(temporaryRoot, 'home');
+		const workspace = path.join(temporaryRoot, 'workspace');
+		await runCli([
+			'init',
+			'--yes',
+			'--project-name',
+			'Demo',
+			'--working-directory',
+			workspace,
+			'--provider',
+			'openai',
+			'--api-key',
+			'test-key',
+			'--memory',
+			'chroma'
+		], {
+			POLYCODE_HOME: home
+		});
+		await writeFile(path.join(workspace, 'agents.yaml'), [
+			'agents:',
+			'  - name: researcher',
+			'    role: Research specialist',
+			'    goal: Find accurate information'
+		].join('\n'));
+
+		const result = await runCli(['chat', 'researcher', '--message', 'hello'], {
+			CHROMA_PORT: '65530',
+			POLYCODE_HOME: home,
+			POLYCODE_MOCK_LLM_RESPONSE: 'hello'
+		});
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toContain('ChromaDB is not reachable');
 	});
 });

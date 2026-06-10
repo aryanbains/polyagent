@@ -1,11 +1,18 @@
 import path from 'node:path';
+import {createInterface} from 'node:readline/promises';
+import {realpathSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import React from 'react';
 import {Command, Option} from 'commander';
 import {render} from 'ink';
 import chalk from 'chalk';
 import boxen from 'boxen';
+import {findAgent, loadAgents} from './agents/load.js';
+import {AgentConfigError} from './agents/schema.js';
+import {runAgentTurn} from './chat/run.js';
 import {APP_NAME, COMMAND_NAME, MEMORY_BACKENDS, PROVIDERS, type InitOptions, type MemoryBackend, type Provider} from './domain.js';
+import {createMemoryStore, getMemoryStats} from './memory/factory.js';
+import {ChromaUnavailableError} from './memory/chroma-store.js';
 import {Dashboard} from './ui/Dashboard.js';
 import {InitWizard} from './ui/InitWizard.js';
 import {getConfigPath, initializeConfig, loadConfig} from './config/store.js';
@@ -44,6 +51,19 @@ type InitCommandOptions = {
 	memory?: string;
 };
 
+type ValidateCommandOptions = {
+	file?: string;
+};
+
+type ChatCommandOptions = {
+	message?: string;
+};
+
+type MemoryCommandOptions = {
+	agent?: string;
+	clear?: boolean;
+};
+
 async function runInit(options: InitCommandOptions): Promise<void> {
 	if (options.yes) {
 		const provider = requireProvider(options.provider ?? 'openai');
@@ -72,8 +92,117 @@ async function runInit(options: InitCommandOptions): Promise<void> {
 
 async function runDashboard(): Promise<void> {
 	const config = await loadConfig();
-	const instance = render(<Dashboard config={config} version={getVersion()} />);
+	const workingDirectory = config?.project.workingDirectory ?? process.cwd();
+	let agentsError: string | null = null;
+	const agents = await loadAgents({workingDirectory}).then((result) => result.agents).catch((error: unknown) => {
+		agentsError = error instanceof Error ? error.message : String(error);
+		return [];
+	});
+	const memoryStats = await getMemoryStats(config);
+	const instance = render(<Dashboard agents={agents} agentsError={agentsError} config={config} memoryStats={memoryStats} version={getVersion()} />);
 	await instance.waitUntilExit();
+}
+
+async function runValidate(options: ValidateCommandOptions): Promise<void> {
+	const config = await loadConfig();
+	const workingDirectory = config?.project.workingDirectory ?? process.cwd();
+	const result = await loadAgents({workingDirectory, filePath: options.file, requireFile: true});
+
+	console.log(chalk.green(`${APP_NAME} agent config is valid.`));
+	console.log(`File: ${result.filePath}`);
+	console.log(`Agents: ${result.agents.length}`);
+
+	for (const agent of result.agents) {
+		console.log(`- ${agent.name}: ${agent.role}`);
+	}
+}
+
+async function runChat(agentName: string, options: ChatCommandOptions): Promise<void> {
+	const config = await loadConfig();
+
+	if (config === null) {
+		throw new Error(`${APP_NAME} is not configured yet. Run ${COMMAND_NAME} init first.`);
+	}
+
+	const {agents} = await loadAgents({workingDirectory: config.project.workingDirectory, requireFile: true});
+	const agent = findAgent(agents, agentName);
+
+	if (options.message !== undefined) {
+		await runAgentTurn({
+			config,
+			agent,
+			message: options.message,
+			onToken: (token) => {
+				process.stdout.write(token);
+			}
+		});
+		process.stdout.write('\n');
+		return;
+	}
+
+	const input = createInterface({
+		input: process.stdin,
+		output: process.stdout
+	});
+
+	try {
+		console.log(chalk.cyan(`Chatting with ${agent.name}. Type .exit to quit.`));
+
+		while (true) {
+			const message = await input.question('you> ');
+
+			if (message.trim() === '.exit') {
+				break;
+			}
+
+			if (message.trim().length === 0) {
+				continue;
+			}
+
+			process.stdout.write(`${agent.name}> `);
+			await runAgentTurn({
+				config,
+				agent,
+				message,
+				onToken: (token) => {
+					process.stdout.write(token);
+				}
+			});
+			process.stdout.write('\n');
+		}
+	} finally {
+		input.close();
+	}
+}
+
+async function runMemory(options: MemoryCommandOptions): Promise<void> {
+	const config = await loadConfig();
+
+	if (config === null) {
+		throw new Error(`${APP_NAME} is not configured yet. Run ${COMMAND_NAME} init first.`);
+	}
+
+	const memoryStore = createMemoryStore(config);
+
+	if (options.clear) {
+		await memoryStore.clear(options.agent);
+		console.log(chalk.green(options.agent === undefined ? 'Memory cleared.' : `Memory cleared for ${options.agent}.`));
+		return;
+	}
+
+	const stats = await memoryStore.stats(options.agent);
+	console.log(boxen([
+		chalk.bold(`${APP_NAME} memory`),
+		`Backend: ${stats.backend}`,
+		`Embeddings: ${stats.totalEmbeddings}`,
+		`Last access: ${stats.lastAccessedAt ?? 'never'}`,
+		stats.storagePath === undefined ? undefined : `Storage: ${stats.storagePath}`,
+		stats.status === undefined ? undefined : `Status: ${stats.status}`
+	].filter((line): line is string => line !== undefined).join('\n'), {
+		padding: 1,
+		borderColor: 'cyan',
+		borderStyle: 'round'
+	}));
 }
 
 async function runStatus(): Promise<void> {
@@ -130,6 +259,32 @@ export function buildProgram(): Command {
 			await runStatus();
 		});
 
+	program
+		.command('validate')
+		.description('Validate agents.yaml, agents.yml, or agents.json in the configured workspace.')
+		.option('--file <path>', 'Validate a specific agents file.')
+		.action(async (options: ValidateCommandOptions) => {
+			await runValidate(options);
+		});
+
+	program
+		.command('chat')
+		.description('Chat with a configured agent.')
+		.argument('<agent-name>', 'Agent name from agents.yaml.')
+		.option('-m, --message <message>', 'Send one message and print the streamed response.')
+		.action(async (agentName: string, options: ChatCommandOptions) => {
+			await runChat(agentName, options);
+		});
+
+	program
+		.command('memory')
+		.description('Inspect or clear agent memory.')
+		.option('--agent <name>', 'Limit memory operation to one agent.')
+		.option('--clear', 'Clear memory instead of showing status.')
+		.action(async (options: MemoryCommandOptions) => {
+			await runMemory(options);
+		});
+
 	program.action(async () => {
 		await runDashboard();
 	});
@@ -141,20 +296,22 @@ export async function main(argv = process.argv): Promise<void> {
 	try {
 		await buildProgram().parseAsync(argv);
 	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
+		const message = error instanceof AgentConfigError || error instanceof ChromaUnavailableError || error instanceof Error ? error.message : String(error);
 		console.error(chalk.red(message));
 		process.exitCode = 1;
 	}
 }
 
-function isDirectExecution(): boolean {
-	const entryPoint = process.argv[1];
-
+export function isDirectExecution(entryPoint = process.argv[1], moduleUrl = import.meta.url): boolean {
 	if (entryPoint === undefined) {
 		return false;
 	}
 
-	return fileURLToPath(import.meta.url) === path.resolve(entryPoint);
+	try {
+		return realpathSync(fileURLToPath(moduleUrl)) === realpathSync(path.resolve(entryPoint));
+	} catch {
+		return fileURLToPath(moduleUrl) === path.resolve(entryPoint);
+	}
 }
 
 if (isDirectExecution()) {

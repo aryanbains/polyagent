@@ -1,14 +1,19 @@
 import React, {useEffect, useState} from 'react';
 import {Box, Text, useApp, useInput, useStdin} from 'ink';
+import type {AgentDefinition} from '../agents/schema.js';
 import {APP_NAME, COMMAND_NAME, type PolycodeConfig} from '../domain.js';
+import type {MemoryStats} from '../memory/types.js';
 import {Panel} from './Panel.js';
 
 type DashboardProps = {
+	agents?: AgentDefinition[];
+	agentsError?: string | null;
 	config: PolycodeConfig | null;
+	memoryStats?: MemoryStats;
 	version: string;
 };
 
-type ActivePanel = 'agents' | 'main';
+type ActivePanel = 'agents' | 'main' | 'memory';
 
 function useTerminalSize(): [number, number] {
 	const [size, setSize] = useState<[number, number]>([
@@ -49,13 +54,15 @@ function useTerminalSize(): [number, number] {
 	return size;
 }
 
-export function Dashboard({config, version}: DashboardProps): JSX.Element {
+export function Dashboard({agents = [], agentsError = null, config, memoryStats, version}: DashboardProps): JSX.Element {
 	const {exit} = useApp();
 	const {isRawModeSupported} = useStdin();
 	const inputEnabled = isRawModeSupported === true;
 	const [columns, rows] = useTerminalSize();
 	const [activePanel, setActivePanel] = useState<ActivePanel>('main');
 	const [helpVisible, setHelpVisible] = useState(false);
+	const [memoryVisible, setMemoryVisible] = useState(false);
+	const [selectedAgentIndex, setSelectedAgentIndex] = useState(0);
 
 	useInput((input, key) => {
 		if (input === 'q') {
@@ -66,12 +73,27 @@ export function Dashboard({config, version}: DashboardProps): JSX.Element {
 			setHelpVisible((visible) => !visible);
 		}
 
+		if (input === 'm') {
+			setMemoryVisible((visible) => !visible);
+			setActivePanel('memory');
+		}
+
 		if (key.leftArrow) {
 			setActivePanel('agents');
 		}
 
 		if (key.rightArrow) {
 			setActivePanel('main');
+		}
+
+		if (key.upArrow) {
+			setSelectedAgentIndex((index) => Math.max(index - 1, 0));
+			setActivePanel('agents');
+		}
+
+		if (key.downArrow) {
+			setSelectedAgentIndex((index) => Math.min(index + 1, Math.max(agents.length - 1, 0)));
+			setActivePanel('agents');
 		}
 	}, {isActive: inputEnabled});
 
@@ -91,8 +113,10 @@ export function Dashboard({config, version}: DashboardProps): JSX.Element {
 
 	const projectName = config?.project.name ?? 'No project configured';
 	const workingDirectory = config?.project.workingDirectory ?? `Run ${COMMAND_NAME} init`;
+	const selectedAgent = agents[selectedAgentIndex];
 	const panelHeight = Math.max(rows - 3, 12);
 	const sidebarWidth = Math.min(Math.max(Math.floor(columns * 0.28), 24), 34);
+	const memoryWidth = memoryVisible ? Math.min(Math.max(Math.floor(columns * 0.25), 24), 34) : undefined;
 
 	return (
 		<Box flexDirection="column" width={columns} minHeight={Math.min(rows, panelHeight + 2)}>
@@ -105,12 +129,18 @@ export function Dashboard({config, version}: DashboardProps): JSX.Element {
 
 			<Box flexDirection="row" height={panelHeight}>
 				<Panel title="Agents" active={activePanel === 'agents'} width={sidebarWidth}>
-					<Text dimColor>No agents yet</Text>
-					<Text dimColor>Phase 2 will load agents.yaml</Text>
+					{agentsError !== null && <Text color="red">Config error</Text>}
+					{agentsError !== null && <Text dimColor>{agentsError}</Text>}
+					{agentsError === null && agents.length === 0 && <Text dimColor>No agents configured</Text>}
+					{agentsError === null && agents.map((agent, index) => (
+						<Text key={agent.name} color={index === selectedAgentIndex ? 'cyan' : undefined}>
+							{index === selectedAgentIndex ? '>' : ' '} {agent.name} idle
+						</Text>
+					))}
 				</Panel>
 
 				<Panel title="Workspace" active={activePanel === 'main'}>
-					<Text bold>No agents configured</Text>
+					<Text bold>{selectedAgent === undefined ? 'No agents configured' : selectedAgent.name}</Text>
 					<Box marginTop={1} flexDirection="column">
 						<Text>Working directory</Text>
 						<Text dimColor>{workingDirectory}</Text>
@@ -119,20 +149,45 @@ export function Dashboard({config, version}: DashboardProps): JSX.Element {
 						<Text>Provider</Text>
 						<Text dimColor>{config?.llm.provider ?? 'Not configured'}</Text>
 					</Box>
+					{selectedAgent !== undefined && (
+						<Box marginTop={1} flexDirection="column">
+							<Text>Role</Text>
+							<Text dimColor>{selectedAgent.role}</Text>
+							<Text>Goal</Text>
+							<Text dimColor>{selectedAgent.goal}</Text>
+							<Text>Memory</Text>
+							<Text dimColor>{selectedAgent.memory_enabled ? 'enabled' : 'disabled'}</Text>
+						</Box>
+					)}
 					{helpVisible && (
 						<Box marginTop={2} borderStyle="single" borderColor="yellow" paddingX={1} flexDirection="column">
 							<Text color="yellow" bold>Keyboard</Text>
 							<Text>Left/Right: switch panels</Text>
+							<Text>Up/Down: select agent</Text>
+							<Text>m: toggle memory</Text>
 							<Text>?: toggle help</Text>
 							<Text>q: quit</Text>
 						</Box>
 					)}
 				</Panel>
+
+				{memoryVisible && (
+					<Panel title="Memory" active={activePanel === 'memory'} width={memoryWidth}>
+						<Text>Backend</Text>
+						<Text dimColor>{memoryStats?.backend ?? config?.memory.backend ?? 'none'}</Text>
+						<Text>Embeddings</Text>
+						<Text dimColor>{memoryStats?.totalEmbeddings ?? 0}</Text>
+						<Text>Last access</Text>
+						<Text dimColor>{memoryStats?.lastAccessedAt ?? 'never'}</Text>
+						<Text>Status</Text>
+						<Text dimColor>{memoryStats?.status ?? 'unknown'}</Text>
+					</Panel>
+				)}
 			</Box>
 
 			<Box justifyContent="space-between" paddingX={1}>
-				<Text inverse>q quit | ? help | left/right panels</Text>
-				<Text inverse>Phase 1 shell ready</Text>
+				<Text inverse>q quit | ? help | m memory | arrows navigate</Text>
+				<Text inverse>Phase 2 shell ready</Text>
 			</Box>
 		</Box>
 	);

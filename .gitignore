@@ -2,6 +2,7 @@ node_modules/
 dist/
 coverage/
 .env
+.polycode/
 .polycode-test-home/
 .tmp/
 npm-debug.log*
