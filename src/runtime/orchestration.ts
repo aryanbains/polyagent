@@ -1,7 +1,7 @@
 import type {AgentDefinition} from '../agents/schema.js';
 
-export type PlannerKind = 'single_agent';
-export type OrchestratorKind = 'single_agent';
+export type PlannerKind = 'single_agent' | 'plan_and_execute' | 'react' | 'sequential';
+export type OrchestratorKind = 'single_agent' | 'multi_agent';
 
 export type PlannerDescriptor = {
 	kind: PlannerKind;
@@ -18,6 +18,7 @@ export type PlannerDecision = {
 	agentName: string;
 	task: string;
 	reason: string;
+	dependsOn?: string[];
 };
 
 export interface Planner {
@@ -37,4 +38,9 @@ export const singleAgentPlanner: PlannerDescriptor = {
 export const singleAgentOrchestrator: OrchestratorDescriptor = {
 	kind: 'single_agent',
 	name: 'single-agent-orchestrator'
+};
+
+export const multiAgentOrchestrator: OrchestratorDescriptor = {
+	kind: 'multi_agent',
+	name: 'multi-agent-orchestrator'
 };

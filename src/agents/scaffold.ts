@@ -6,7 +6,11 @@ export type ScaffoldAgentsResult = {
 	created: boolean;
 };
 
-const starterAgentsYaml = `agents:
+const starterAgentsYaml = `orchestrator:
+  strategy: plan_and_execute
+  max_parallel_agents: 3
+  max_iterations: 10
+agents:
   - name: researcher
     role: "Project-aware coding assistant that can inspect files, answer questions, and help with implementation tasks"
     goal: "Help the user understand and change this project accurately"
@@ -20,6 +24,22 @@ const starterAgentsYaml = `agents:
       - execute_command
       - web_search
       - fetch_url
+  - name: analyst
+    role: "Analysis specialist that compares findings, extracts tradeoffs, and identifies risks"
+    goal: "Turn raw research and project context into structured recommendations"
+    memory_enabled: true
+    tools:
+      - read_file
+      - list_directory
+      - search_files
+  - name: writer
+    role: "Technical writer that creates clear markdown reports and implementation summaries"
+    goal: "Synthesize agent results into concise, useful documents"
+    memory_enabled: true
+    tools:
+      - read_file
+      - write_file
+      - append_to_file
 `;
 
 async function fileExists(filePath: string): Promise<boolean> {

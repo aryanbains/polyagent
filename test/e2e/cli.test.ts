@@ -85,7 +85,7 @@ describe('polycode cli', () => {
 		expect(rawConfig).toContain('"provider": "openai"');
 		expect(starterAgents).toContain('name: researcher');
 		expect(validateResult.exitCode).toBe(0);
-		expect(validateResult.stdout).toContain('Agents: 1');
+		expect(validateResult.stdout).toContain('Agents: 3');
 	});
 
 	it('validates agents.yaml and chats with a mocked LLM', async () => {
@@ -285,5 +285,50 @@ describe('polycode cli', () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(result.stdout).toContain('package.json read');
+	});
+
+	it('runs a multi-agent task, records a session, and replays it', async () => {
+		const home = path.join(temporaryRoot, 'home');
+		const workspace = path.join(temporaryRoot, 'workspace');
+		await runCli([
+			'init',
+			'--yes',
+			'--project-name',
+			'Demo',
+			'--working-directory',
+			workspace,
+			'--provider',
+			'openai',
+			'--api-key',
+			'test-key',
+			'--memory',
+			'skip'
+		], {
+			POLYCODE_HOME: home
+		});
+
+		const runResult = await runCli([
+			'run',
+			'--multi',
+			'--yes',
+			'Research the top 5 JavaScript testing frameworks in 2024, compare their features, and create a markdown report at ./reports/testing-frameworks.md'
+		], {
+			POLYCODE_HOME: home,
+			POLYCODE_MOCK_LLM_RESPONSE: 'multi agent output'
+		});
+		const report = await readFile(path.join(workspace, 'reports', 'testing-frameworks.md'), 'utf8');
+		const sessionMatch = /Session: (.+\.json)/.exec(runResult.stdout);
+		const replayResult = await runCli(['replay', sessionMatch?.[1] ?? '', '--speed', '10'], {
+			POLYCODE_HOME: home
+		});
+
+		expect(runResult.exitCode).toBe(0);
+		expect(runResult.stdout).toContain('Plan');
+		expect(runResult.stdout).toContain('starting research with researcher');
+		expect(runResult.stdout).toContain('Session:');
+		expect(report).toContain('JavaScript testing frameworks');
+		expect(replayResult.exitCode).toBe(0);
+		expect(replayResult.stdout).toContain('Polycode replay');
+		expect(replayResult.stdout).toContain('Replay complete: success');
 	});
 });

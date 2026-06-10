@@ -1,7 +1,7 @@
 import {access, readFile} from 'node:fs/promises';
 import path from 'node:path';
 import yaml from 'js-yaml';
-import {AgentConfigError, AgentsFileSchema, formatAgentIssues, type AgentDefinition} from './schema.js';
+import {AgentConfigError, AgentsFileSchema, formatAgentIssues, type AgentDefinition, type OrchestratorConfig} from './schema.js';
 
 type LoadAgentsOptions = {
 	workingDirectory: string;
@@ -11,6 +11,7 @@ type LoadAgentsOptions = {
 
 export type LoadedAgents = {
 	agents: AgentDefinition[];
+	orchestrator: OrchestratorConfig | null;
 	filePath: string | null;
 };
 
@@ -59,7 +60,7 @@ export async function loadAgents(options: LoadAgentsOptions): Promise<LoadedAgen
 			throw new AgentConfigError(`No agents.yaml, agents.yml, or agents.json found in ${options.workingDirectory}.`);
 		}
 
-		return {agents: [], filePath: null};
+		return {agents: [], orchestrator: null, filePath: null};
 	}
 
 	let parsedConfig: unknown;
@@ -79,6 +80,7 @@ export async function loadAgents(options: LoadAgentsOptions): Promise<LoadedAgen
 
 	return {
 		agents: result.data.agents,
+		orchestrator: result.data.orchestrator ?? null,
 		filePath: agentsFile
 	};
 }

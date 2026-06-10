@@ -2,7 +2,7 @@
 
 Polycode is a JavaScript-native multi-agent orchestration framework with a rich terminal GUI. The goal is to bring the multi-agent workflow ideas common in Python agent frameworks into the Node.js and TypeScript ecosystem, with an installable CLI that feels native to developer terminals.
 
-This repository is currently in **Phase 3.5** of active development. Phase 1 established the installable CLI and terminal shell. Phase 2 added agent definitions, validation, model-provider wiring, chat, and persistent memory. Phase 3 added the first tool system for files, commands, and web access. Phase 3.5 hardens the runtime before Phase 4: structured execution events, explicit execution sessions, stronger tool failure handling, web-search settings, and golden-path regressions.
+This repository is currently in **Phase 4** of active development. Phase 1 established the installable CLI and terminal shell. Phase 2 added agent definitions, validation, model-provider wiring, chat, and persistent memory. Phase 3 added the first tool system for files, commands, and web access. Phase 3.5 hardened the runtime with structured execution events, explicit execution sessions, stronger tool failure handling, web-search settings, and golden-path regressions. Phase 4 adds the first multi-agent orchestration layer: planning, dependency-aware scheduling, agent-to-agent messages, session recording, and replay.
 
 ## What Works Today
 
@@ -13,6 +13,8 @@ This repository is currently in **Phase 3.5** of active development. Phase 1 est
 - `polycode status` prints the current local configuration summary.
 - `polycode validate` validates `agents.yaml`, `agents.yml`, or `agents.json`.
 - `polycode chat <agent-name>` and `polycode run "<task>"` remain available for scripts and direct testing.
+- `polycode run --multi "<task>"` plans and executes a task across multiple agents.
+- `polycode replay <session-id>` replays a recorded multi-agent session.
 - `polycode memory` shows memory backend status and embedding count.
 - `polycode --version` prints the installed package version.
 - API keys are not echoed in CLI output and are encrypted before being written to disk.
@@ -35,7 +37,7 @@ Run the onboarding wizard:
 polycode init
 ```
 
-`init` saves your machine config and creates a starter `agents.yaml` with a `researcher` agent. Validate that project agent file:
+`init` saves your machine config and creates a starter `agents.yaml` with an orchestrator plus `researcher`, `analyst`, and `writer` agents. Validate that project agent file:
 
 ```bash
 polycode validate
@@ -60,16 +62,25 @@ Tool calls appear in the session transcript as they happen. File writes and shel
 Edit the generated `agents.yaml` in your configured working directory when you want custom agents:
 
 ```yaml
+orchestrator:
+  strategy: plan_and_execute
+  max_parallel_agents: 3
+  max_iterations: 10
 agents:
   - name: researcher
     role: Project-aware coding assistant that can inspect files and answer questions
     goal: Help the user understand and change this project accurately
     memory_enabled: true
     tools: [read_file, list_directory, search_files, web_search, fetch_url]
+  - name: analyst
+    role: Analysis specialist that compares findings and identifies risks
+    goal: Turn raw research into structured recommendations
+    memory_enabled: true
   - name: writer
     role: Content writer that produces clear, structured documents
     goal: Transform research into readable content
     memory_enabled: true
+    tools: [read_file, write_file, append_to_file]
 ```
 
 Useful in-app commands:
@@ -94,6 +105,21 @@ The direct commands still exist for scripts and tests:
 polycode chat researcher --message "What did we discuss before?"
 polycode run "read my package.json and tell me what dependencies I am using"
 polycode run --yes "create hello.txt with Hello World"
+```
+
+Run a multi-agent task:
+
+```bash
+polycode run --multi --yes "Research the top 5 JavaScript testing frameworks in 2024, compare their features, and create a markdown report at ./reports/testing-frameworks.md"
+```
+
+The multi-agent runner prints the plan, delegates work to agents, shows agent-to-agent messages and tool events, saves a session under `.polycode/sessions/`, and writes the requested markdown report when file approval is allowed.
+
+Replay the recorded session:
+
+```bash
+polycode replay 2026-06-10T20-00-00-000Z
+polycode replay ./.polycode/sessions/2026-06-10T20-00-00-000Z.json --speed 4
 ```
 
 For automated setup:
@@ -235,9 +261,42 @@ polycode
 
 DuckDuckGo Instant Answer is a no-key fallback for summaries, definitions, and related-topic links. It is not a full ranked search-results API, so Tavily remains the better mode for agentic research tasks when available.
 
+## Multi-Agent Orchestration
+
+Top-level `orchestrator` config:
+
+```yaml
+orchestrator:
+  strategy: plan_and_execute
+  max_parallel_agents: 3
+  max_iterations: 10
+```
+
+Current strategies:
+
+- `plan_and_execute`: creates research, analysis, and synthesis steps, then schedules dependency-ready work.
+- `sequential`: forces a strict dependency chain.
+- `react`: accepted in config for forward compatibility; currently uses the same planner shape as `plan_and_execute`.
+
+The Phase 4 message bus validates every inter-agent message with zod. Messages are stored in the session history:
+
+```ts
+{
+  from: "researcher",
+  to: "writer",
+  type: "response",
+  payload: {},
+  timestamp: Date
+}
+```
+
+The scheduler uses `p-queue` to honor `max_parallel_agents`. Independent steps run concurrently when possible; dependent steps wait for prior results. If a step fails, the orchestrator records the failure, sends an error message, and continues with the remaining graph where possible.
+
+Session recordings include plan, messages, execution events, step outputs, final output, stats, and duration.
+
 ## Runtime Events
 
-Phase 3.5 introduces an execution session object for every agent run. Today there is one active agent, but the type system already separates planner and orchestrator descriptors so Phase 4 can add multi-agent scheduling without reshaping the run contract.
+Polycode has an execution session object for every agent run. Phase 4 extends it to multi-agent sessions while keeping planner and orchestrator descriptors separate in the type system.
 
 Execution events include:
 
@@ -260,11 +319,11 @@ npm run check
 
 `npm run check` is the main verification command. It runs TypeScript checks, unit tests, a production build, and CLI e2e tests.
 
-Phase 3.5 golden-path regressions live in `test/phase35.test.ts` and cover repo inspection, file summarization, guarded file modification, command execution, and web docs fetching.
+Phase 3.5 golden-path regressions live in `test/phase35.test.ts` and cover repo inspection, file summarization, guarded file modification, command execution, and web docs fetching. Phase 4 orchestration tests live in `test/orchestration.test.ts` and cover message passing, graceful fallback, sequential vs parallel scheduling, report creation, and session replay loading.
 
 ## Roadmap
 
-Phase 4 is the multi-agent orchestration layer. Phase 5 is plugin support, docs polish, and publish readiness.
+Phase 5 is plugin support, docs polish, and publish readiness.
 
 ## Status
 

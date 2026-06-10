@@ -6,6 +6,7 @@ import type {ModelMessage} from 'ai';
 import React from 'react';
 import {Command, Option} from 'commander';
 import {render} from 'ink';
+import {confirm} from '@inquirer/prompts';
 import chalk from 'chalk';
 import boxen from 'boxen';
 import {findAgent, loadAgents} from './agents/load.js';
@@ -16,8 +17,12 @@ import {createMemoryStore, getMemoryStats} from './memory/factory.js';
 import {ChromaUnavailableError} from './memory/chroma-store.js';
 import {summarizeToolOutput} from './tools/registry.js';
 import type {ToolApprovalMode} from './tools/types.js';
+import {runMultiAgentTask} from './orchestration/run.js';
+import {loadRecordedSession} from './orchestration/session-recorder.js';
+import {planMultiAgentTask, type MultiAgentPlan} from './orchestration/planner.js';
 import {Dashboard} from './ui/Dashboard.js';
 import {InitWizard} from './ui/InitWizard.js';
+import {MultiAgentSessionView} from './ui/MultiAgentSessionView.js';
 import {getConfigPath, initializeConfig, loadConfig} from './config/store.js';
 import {getVersion} from './version.js';
 
@@ -70,7 +75,12 @@ type MemoryCommandOptions = {
 
 type RunCommandOptions = {
 	agent?: string;
+	multi?: boolean;
 	yes?: boolean;
+};
+
+type ReplayCommandOptions = {
+	speed?: string;
 };
 
 function printNextSteps(agentName = 'researcher'): void {
@@ -97,6 +107,17 @@ function printToolStart(toolName: string, input: unknown): void {
 function printToolFinish(toolName: string, output: unknown, success: boolean): void {
 	const color = success ? chalk.green : chalk.red;
 	console.log(color(`<-${success ? '' : ' failed'} ${toolName}: ${summarizeToolOutput(output)}`));
+}
+
+function printPlan(plan: MultiAgentPlan): void {
+	console.log(chalk.bold(`Plan ${plan.id}`));
+
+	for (const step of plan.steps) {
+		const dependencyText = step.dependsOn.length === 0 ? 'none' : step.dependsOn.join(', ');
+		console.log(`- ${step.id}: ${step.title}`);
+		console.log(`  agent: ${step.agentName}`);
+		console.log(`  depends on: ${dependencyText}`);
+	}
 }
 
 async function runInit(options: InitCommandOptions): Promise<void> {
@@ -147,6 +168,7 @@ async function runValidate(options: ValidateCommandOptions): Promise<void> {
 	console.log(chalk.green(`${APP_NAME} agent config is valid.`));
 	console.log(`File: ${result.filePath}`);
 	console.log(`Agents: ${result.agents.length}`);
+	console.log(`Orchestrator: ${result.orchestrator === null ? 'not configured' : `${result.orchestrator.strategy}, parallel=${result.orchestrator.max_parallel_agents}, iterations=${result.orchestrator.max_iterations}`}`);
 
 	for (const agent of result.agents) {
 		console.log(`- ${agent.name}: ${agent.role}`);
@@ -239,7 +261,73 @@ async function runTask(task: string, options: RunCommandOptions): Promise<void> 
 		throw new Error(`${APP_NAME} is not configured yet. Run ${COMMAND_NAME} init first.`);
 	}
 
-	const {agents} = await loadAgents({workingDirectory: config.project.workingDirectory, requireFile: true});
+	const {agents, orchestrator} = await loadAgents({workingDirectory: config.project.workingDirectory, requireFile: true});
+
+	if (options.multi === true) {
+		const effectiveOrchestrator = orchestrator ?? {
+			strategy: 'plan_and_execute' as const,
+			max_parallel_agents: 3,
+			max_iterations: 10
+		};
+		let approved = true;
+		const plan = planMultiAgentTask(task, agents, effectiveOrchestrator);
+		printPlan(plan);
+
+		if (process.stdin.isTTY === true && options.yes !== true) {
+			approved = await confirm({
+				message: 'Run this multi-agent plan?',
+				default: true
+			});
+		}
+
+		if (!approved) {
+			console.log(chalk.yellow('Multi-agent run cancelled.'));
+			return;
+		}
+
+		const finalResult = await runMultiAgentTask({
+			config,
+			agents,
+			orchestrator: effectiveOrchestrator,
+			task,
+			approvalMode: getApprovalMode(options.yes),
+			callbacks: {
+				onMessage: (message) => {
+					console.log(chalk.gray(`[${message.type}] ${message.from} -> ${message.to}`));
+				},
+				onExecutionEvent: (event) => {
+					if (event.type === 'tool_started') {
+						console.log(chalk.cyan(`tool -> ${event.stepId} ${event.toolName}`));
+					}
+
+					if (event.type === 'tool_finished') {
+						console.log(chalk.cyan(`tool <- ${event.stepId} ${event.toolName} ${event.status} ${event.durationMs}ms`));
+					}
+				},
+				onStepStart: (step) => {
+					console.log(chalk.cyan(`starting ${step.id} with ${step.agentName}`));
+				},
+				onStepFinish: (record) => {
+					const color = record.status === 'succeeded' ? chalk.green : chalk.red;
+					console.log(color(`finished ${record.stepId} ${record.status} ${record.durationMs}ms`));
+				},
+				onToken: (_agentName, token) => {
+					process.stdout.write(token);
+				}
+			}
+		});
+
+		process.stdout.write('\n');
+		console.log(chalk.bold(finalResult.finalOutput));
+		console.log(`Session: ${finalResult.sessionPath}`);
+
+		if (!finalResult.success) {
+			process.exitCode = 1;
+		}
+
+		return;
+	}
+
 	const agent = options.agent === undefined ? agents[0] : findAgent(agents, options.agent);
 
 	if (agent === undefined) {
@@ -265,6 +353,45 @@ async function runTask(task: string, options: RunCommandOptions): Promise<void> 
 		}
 	});
 	process.stdout.write('\n');
+}
+
+async function runReplay(sessionId: string, options: ReplayCommandOptions): Promise<void> {
+	const config = await loadConfig();
+
+	if (config === null) {
+		throw new Error(`${APP_NAME} is not configured yet. Run ${COMMAND_NAME} init first.`);
+	}
+
+	const speed = Math.max(Number(options.speed ?? '1'), 0.1);
+	const delayMs = Math.round(250 / speed);
+	const {filePath, session} = await loadRecordedSession(config.project.workingDirectory, sessionId);
+
+	console.log(chalk.bold(`${APP_NAME} replay`));
+	console.log(`File: ${filePath}`);
+	console.log(`Task: ${session.task}`);
+	printPlan(session.plan);
+
+	for (const message of session.messages) {
+		console.log(chalk.gray(`[${String(message.timestamp)}] ${message.type}: ${message.from} -> ${message.to}`));
+		await new Promise((resolve) => {
+			setTimeout(resolve, delayMs);
+		});
+	}
+
+	for (const event of session.executionEvents) {
+		console.log(`${event.type}: ${event.agentName}/${event.stepId}`);
+		await new Promise((resolve) => {
+			setTimeout(resolve, delayMs);
+		});
+	}
+
+	console.log(chalk.green(session.success ? 'Replay complete: success' : 'Replay complete: failed'));
+	console.log(session.finalOutput);
+
+	if (process.stdout.isTTY === true) {
+		const instance = render(<MultiAgentSessionView session={session} version={getVersion()} />);
+		await instance.waitUntilExit();
+	}
 }
 
 async function runMemory(options: MemoryCommandOptions): Promise<void> {
@@ -375,12 +502,22 @@ export function buildProgram(): Command {
 
 	program
 		.command('run')
-		.description('Run a task against the first configured agent, with streaming output and visible tool calls.')
+		.description('Run a task against the first configured agent, or with the multi-agent orchestrator.')
 		.argument('<task>', 'Task to run.')
 		.option('--agent <name>', 'Run the task with a specific agent instead of the first one.')
+		.option('--multi', 'Run with the configured multi-agent orchestrator.')
 		.option('-y, --yes', 'Auto-approve write and command tool calls.')
 		.action(async (task: string, options: RunCommandOptions) => {
 			await runTask(task, options);
+		});
+
+	program
+		.command('replay')
+		.description('Replay a recorded multi-agent session.')
+		.argument('<session-id-or-path>', 'Session id from .polycode/sessions, or a JSON file path.')
+		.option('--speed <number>', 'Replay speed multiplier.', '1')
+		.action(async (sessionId: string, options: ReplayCommandOptions) => {
+			await runReplay(sessionId, options);
 		});
 
 	program

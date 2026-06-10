@@ -10,11 +10,19 @@ export const AgentDefinitionSchema = z.object({
 	system_prompt: z.string().min(1, 'System prompt cannot be empty').optional()
 }).strict();
 
+export const OrchestratorConfigSchema = z.object({
+	strategy: z.enum(['plan_and_execute', 'react', 'sequential']).default('plan_and_execute'),
+	max_parallel_agents: z.number().int().positive().max(10).default(3),
+	max_iterations: z.number().int().positive().max(100).default(10)
+}).strict();
+
 export const AgentsFileSchema = z.object({
+	orchestrator: OrchestratorConfigSchema.optional(),
 	agents: z.array(AgentDefinitionSchema).min(1, 'At least one agent must be defined')
 }).strict();
 
 export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>;
+export type OrchestratorConfig = z.infer<typeof OrchestratorConfigSchema>;
 export type AgentsFile = z.infer<typeof AgentsFileSchema>;
 
 export class AgentConfigError extends Error {

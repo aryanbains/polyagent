@@ -17,6 +17,10 @@ afterEach(async () => {
 describe('loadAgents', () => {
 	it('loads valid agents.yaml files', async () => {
 		await writeFile(path.join(temporaryDirectory, 'agents.yaml'), [
+			'orchestrator:',
+			'  strategy: plan_and_execute',
+			'  max_parallel_agents: 2',
+			'  max_iterations: 5',
 			'agents:',
 			'  - name: researcher',
 			'    role: Research specialist',
@@ -29,6 +33,11 @@ describe('loadAgents', () => {
 		expect(result.agents).toHaveLength(1);
 		expect(result.agents[0]?.name).toBe('researcher');
 		expect(result.agents[0]?.memory_enabled).toBe(true);
+		expect(result.orchestrator).toEqual({
+			strategy: 'plan_and_execute',
+			max_parallel_agents: 2,
+			max_iterations: 5
+		});
 	});
 
 	it('fails invalid schemas with readable paths', async () => {
