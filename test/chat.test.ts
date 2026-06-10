@@ -4,6 +4,7 @@ import {AiSdkLlmClient, LlmCallError, runAgentTurn, type LlmClient, type LlmStre
 import type {PolycodeConfig} from '../src/domain.js';
 import {LocalVectorMemoryStore} from '../src/memory/local-store.js';
 import {HashEmbedder} from '../src/memory/embedder.js';
+import {createExecutionSession} from '../src/runtime/execution.js';
 import {mkdtemp, rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -136,6 +137,70 @@ describe('runAgentTurn', () => {
 		});
 
 		expect(events).toEqual(['start:read_file', 'finish:read_file']);
+	});
+
+	it('records structured execution events for runs and tool calls', async () => {
+		const session = createExecutionSession();
+		const llmClient: LlmClient = {
+			async *streamText(options: LlmStreamOptions): AsyncIterable<string> {
+				options.onToolStart?.('read_file', {path: 'package.json'}, 'tool-call-1');
+				options.onToolFinish?.('read_file', {ok: true, message: 'package contents'}, true, 'tool-call-1');
+				yield 'done';
+			}
+		};
+
+		await runAgentTurn({
+			config,
+			agent: {
+				...agent,
+				memory_enabled: false,
+				tools: ['read_file']
+			},
+			message: 'read package.json',
+			llmClient,
+			session,
+			toolContext: {
+				workingDirectory: process.cwd(),
+				approvalMode: 'deny'
+			}
+		});
+
+		expect(session.planner.kind).toBe('single_agent');
+		expect(session.orchestrator.kind).toBe('single_agent');
+		expect(session.events.map((event) => event.type)).toEqual([
+			'run_started',
+			'tool_started',
+			'tool_finished',
+			'run_finished'
+		]);
+		expect(session.events[0]).toMatchObject({
+			agentName: 'researcher',
+			stepId: 'step-1',
+			status: 'started'
+		});
+		expect(session.events[1]).toMatchObject({
+			agentName: 'researcher',
+			stepId: 'step-2',
+			toolName: 'read_file',
+			toolCallId: 'tool-call-1',
+			input: {path: 'package.json'}
+		});
+		expect(session.events[2]).toMatchObject({
+			agentName: 'researcher',
+			stepId: 'step-2',
+			toolName: 'read_file',
+			success: true,
+			status: 'succeeded'
+		});
+		expect(session.events[2]).toHaveProperty('durationMs');
+		expect(session.events[2]).toHaveProperty('startedAt');
+		expect(session.events[2]).toHaveProperty('completedAt');
+		expect(session.events[3]).toMatchObject({
+			agentName: 'researcher',
+			stepId: 'step-1',
+			success: true,
+			status: 'succeeded'
+		});
 	});
 
 	it('normalizes provider failures into friendly LLM call errors', async () => {

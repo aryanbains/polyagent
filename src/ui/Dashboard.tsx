@@ -1,4 +1,4 @@
-import path from 'node:path';
+﻿import path from 'node:path';
 import React, {useEffect, useMemo, useRef, useState} from 'react';
 import {Box, Text, useApp, useInput, useStdin} from 'ink';
 import TextInput from 'ink-text-input';
@@ -8,8 +8,8 @@ import {APP_NAME, COMMAND_NAME, type PolycodeConfig} from '../domain.js';
 import type {MemoryStats} from '../memory/types.js';
 import {getConfigPath} from '../config/store.js';
 import {runAgentTurn, type LlmClient} from '../chat/run.js';
-import {summarizeToolOutput} from '../tools/registry.js';
-import type {ToolApprovalMode} from '../tools/types.js';
+import {createExecutionSession, type ExecutionEvent} from '../runtime/execution.js';
+import type {ToolApprovalMode, WebSearchProvider} from '../tools/types.js';
 import {Panel} from './Panel.js';
 
 type DashboardProps = {
@@ -130,6 +130,18 @@ function truncate(value: string, maxLength = 2400): string {
 	return `${value.slice(0, maxLength)}\n... truncated ...`;
 }
 
+function normalizeWebSearchProvider(value: string): WebSearchProvider | null {
+	if (value === 'auto' || value === 'tavily' || value === 'duckduckgo') {
+		return value;
+	}
+
+	if (value === 'local' || value === 'on-device' || value === 'device') {
+		return 'duckduckgo';
+	}
+
+	return null;
+}
+
 export function Dashboard({agents = [], agentsError = null, config, llmClient, memoryStats, version}: DashboardProps): JSX.Element {
 	const {exit} = useApp();
 	const {isRawModeSupported} = useStdin();
@@ -142,6 +154,7 @@ export function Dashboard({agents = [], agentsError = null, config, llmClient, m
 	const [inputValue, setInputValue] = useState('');
 	const [isRunning, setIsRunning] = useState(false);
 	const [approvalMode, setApprovalMode] = useState<ToolApprovalMode>('prompt');
+	const [webSearchProvider, setWebSearchProvider] = useState<WebSearchProvider>('auto');
 	const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
 	const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
 	const conversationsRef = useRef<Record<string, ModelMessage[]>>({});
@@ -251,6 +264,22 @@ export function Dashboard({agents = [], agentsError = null, config, llmClient, m
 		setPendingApproval({message, resolve});
 	});
 
+	const handleExecutionEvent = (event: ExecutionEvent): void => {
+		if (event.type === 'tool_started') {
+			appendEntry('tool', `-> ${event.stepId} ${event.toolName}(${JSON.stringify(event.input)})`);
+			return;
+		}
+
+		if (event.type === 'tool_finished') {
+			appendEntry('tool', `<- ${event.stepId} ${event.toolName} ${event.success ? 'ok' : 'failed'} ${event.durationMs}ms: ${event.outputSummary}`);
+			return;
+		}
+
+		if (event.type === 'run_finished') {
+			appendEntry('system', `Run ${event.success ? 'completed' : 'failed'} in ${event.durationMs}ms.`);
+		}
+	};
+
 	const runCommand = (command: string): void => {
 		const [name = '', ...args] = command.slice(1).trim().split(/\s+/);
 		const argument = args.join(' ');
@@ -262,7 +291,7 @@ export function Dashboard({agents = [], agentsError = null, config, llmClient, m
 
 		if (name === 'help' || name === '?') {
 			setHelpVisible((visible) => !visible);
-			appendEntry('system', 'Commands: /help, /agents, /agent <name>, /memory, /approve on|off|deny, /clear, /exit');
+			appendEntry('system', 'Commands: /help, /agents, /agent <name>, /settings, /settings web auto|tavily|duckduckgo, /memory, /approve on|off|deny, /clear, /exit');
 			return;
 		}
 
@@ -288,6 +317,36 @@ export function Dashboard({agents = [], agentsError = null, config, llmClient, m
 		if (name === 'memory') {
 			setMemoryVisible((visible) => !visible);
 			setActivePanel('memory');
+			return;
+		}
+
+		if (name === 'settings') {
+			const [settingName = '', settingValue = ''] = args;
+
+			if (settingName === '') {
+				appendEntry('system', [
+					'Settings',
+					`web search: ${webSearchProvider}`,
+					`approvals: ${approvalMode}`,
+					'Use /settings web auto|tavily|duckduckgo. Aliases: local, on-device.'
+				].join('\n'));
+				return;
+			}
+
+			if (settingName === 'web') {
+				const provider = normalizeWebSearchProvider(settingValue);
+
+				if (provider === null) {
+					appendEntry('error', 'Unknown web search setting. Use /settings web auto|tavily|duckduckgo.');
+					return;
+				}
+
+				setWebSearchProvider(provider);
+				appendEntry('system', `Web search set to ${provider}${provider === 'duckduckgo' ? ' (no-key DuckDuckGo Instant Answer)' : ''}.`);
+				return;
+			}
+
+			appendEntry('error', `Unknown setting "${settingName}". Use /settings.`);
 			return;
 		}
 
@@ -341,6 +400,9 @@ export function Dashboard({agents = [], agentsError = null, config, llmClient, m
 		conversationsRef.current[agent.name] = conversation;
 		appendEntry('user', message);
 		const assistantEntryId = appendEntry('assistant', '');
+		const session = createExecutionSession({
+			onEvent: handleExecutionEvent
+		});
 		setIsRunning(true);
 
 		void runAgentTurn({
@@ -349,19 +411,15 @@ export function Dashboard({agents = [], agentsError = null, config, llmClient, m
 			message,
 			conversation,
 			llmClient,
+			session,
 			toolContext: {
 				workingDirectory: config.project.workingDirectory,
 				approvalMode,
+				webSearchProvider,
 				requestApproval: requestApprovalInUi,
 				onPreview: (preview) => {
 					appendEntry('preview', truncate(preview));
 				}
-			},
-			onToolStart: (toolName, input) => {
-				appendEntry('tool', `-> ${toolName}(${JSON.stringify(input)})`);
-			},
-			onToolFinish: (toolName, output, success) => {
-				appendEntry('tool', `<-${success ? '' : ' failed'} ${toolName}: ${summarizeToolOutput(output)}`);
 			},
 			onToken: (token) => {
 				updateEntry(assistantEntryId, (text) => text + token);
@@ -465,6 +523,8 @@ export function Dashboard({agents = [], agentsError = null, config, llmClient, m
 							<Text>/help: toggle this help</Text>
 							<Text>/agents: list agents</Text>
 							<Text>/agent name: switch agent</Text>
+							<Text>/settings: show settings</Text>
+							<Text>/settings web auto|tavily|duckduckgo</Text>
 							<Text>/memory: toggle memory panel</Text>
 							<Text>/approve on|off|deny: tool approvals</Text>
 							<Text>/clear: clear session view</Text>
@@ -483,6 +543,8 @@ export function Dashboard({agents = [], agentsError = null, config, llmClient, m
 						<Text dimColor>{memoryStats?.lastAccessedAt ?? 'never'}</Text>
 						<Text>Status</Text>
 						<Text dimColor>{memoryStats?.status ?? 'unknown'}</Text>
+						<Text>Web search</Text>
+						<Text dimColor>{webSearchProvider}</Text>
 					</Panel>
 				)}
 			</Box>
@@ -496,7 +558,7 @@ export function Dashboard({agents = [], agentsError = null, config, llmClient, m
 				)}
 				<Box justifyContent="space-between">
 					<Box flexGrow={1}>
-						<Text color="cyan">› </Text>
+						<Text color="cyan">&gt; </Text>
 						<TextInput
 							value={inputValue}
 							onChange={setInputValue}
@@ -507,7 +569,7 @@ export function Dashboard({agents = [], agentsError = null, config, llmClient, m
 					</Box>
 					<Text inverse>{status}</Text>
 				</Box>
-				<Text dimColor>/help for commands · Ctrl+C exits · approvals {approvalMode}</Text>
+				<Text dimColor>/help for commands | Ctrl+C exits | approvals {approvalMode} | web {webSearchProvider}</Text>
 			</Box>
 		</Box>
 	);

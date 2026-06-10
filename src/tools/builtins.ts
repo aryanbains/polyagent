@@ -5,12 +5,27 @@ import fg from 'fast-glob';
 import {tavily} from '@tavily/core';
 import {z} from 'zod';
 import {createUnifiedDiff, limitOutput, readTextFileIfExists, requestApproval, resolveWorkspacePath, writeTextFile} from './safety.js';
-import type {ToolDefinition, ToolResult} from './types.js';
+import type {ToolContext, ToolDefinition, ToolResult, WebSearchProvider} from './types.js';
 
 function withLineNumbers(content: string): string {
 	const lines = content.split(/\r?\n/);
 	const width = String(lines.length).length;
 	return lines.map((line, index) => `${String(index + 1).padStart(width, ' ')} | ${line}`).join('\n');
+}
+
+function isLikelyText(buffer: Buffer): boolean {
+	if (buffer.length === 0) {
+		return true;
+	}
+
+	if (buffer.includes(0)) {
+		return false;
+	}
+
+	const sample = buffer.subarray(0, Math.min(buffer.length, 4096));
+	const text = sample.toString('utf8');
+	const replacementCharacters = [...text].filter((character) => character === '\uFFFD').length;
+	return replacementCharacters / Math.max(text.length, 1) < 0.05;
 }
 
 async function directoryTree(directory: string, recursive: boolean): Promise<string> {
@@ -40,32 +55,108 @@ function stripHtml(value: string): string {
 		.trim();
 }
 
-async function duckDuckGoSearch(query: string, maxResults: number): Promise<ToolResult> {
+function getFetch(context?: ToolContext): typeof fetch {
+	return context?.fetch ?? fetch;
+}
+
+function resolveWebSearchProvider(context: ToolContext): WebSearchProvider {
+	const value = process.env.POLYCODE_WEB_SEARCH_PROVIDER?.toLowerCase();
+
+	if (value === 'tavily' || value === 'duckduckgo' || value === 'auto') {
+		return value;
+	}
+
+	return context.webSearchProvider ?? 'auto';
+}
+
+type DuckDuckGoTopic = {
+	Text?: string;
+	FirstURL?: string;
+	Topics?: DuckDuckGoTopic[];
+};
+
+function flattenDuckDuckGoTopics(topics: DuckDuckGoTopic[]): DuckDuckGoTopic[] {
+	return topics.flatMap((topic) => topic.Topics === undefined ? [topic] : flattenDuckDuckGoTopics(topic.Topics));
+}
+
+async function duckDuckGoSearch(query: string, maxResults: number, context: ToolContext): Promise<ToolResult> {
 	const url = new URL('https://api.duckduckgo.com/');
 	url.searchParams.set('q', query);
 	url.searchParams.set('format', 'json');
 	url.searchParams.set('no_html', '1');
+	url.searchParams.set('no_redirect', '1');
 	url.searchParams.set('skip_disambig', '1');
-	const response = await fetch(url);
+	let response: Response;
+
+	try {
+		response = await getFetch(context)(url);
+	} catch (error) {
+		return {
+			ok: false,
+			message: `DuckDuckGo search failed: ${error instanceof Error ? error.message : String(error)}`
+		};
+	}
 
 	if (!response.ok) {
-		throw new Error(`DuckDuckGo search failed with HTTP ${response.status}`);
+		return {
+			ok: false,
+			message: `DuckDuckGo search failed with HTTP ${response.status}`
+		};
 	}
 
 	const data = await response.json() as {
+		Answer?: string;
 		AbstractText?: string;
-		RelatedTopics?: Array<{Text?: string; FirstURL?: string}>;
+		AbstractURL?: string;
+		Definition?: string;
+		DefinitionURL?: string;
+		RelatedTopics?: DuckDuckGoTopic[];
 	};
-	const related = (data.RelatedTopics ?? [])
+	const related = flattenDuckDuckGoTopics(data.RelatedTopics ?? [])
 		.filter((item) => item.Text !== undefined)
 		.slice(0, maxResults)
 		.map((item, index) => `${index + 1}. ${item.Text}${item.FirstURL === undefined ? '' : ` (${item.FirstURL})`}`);
-	const message = [data.AbstractText, ...related].filter(Boolean).join('\n');
+	const message = [
+		data.Answer,
+		data.AbstractText === undefined || data.AbstractText.length === 0 ? undefined : `${data.AbstractText}${data.AbstractURL === undefined ? '' : ` (${data.AbstractURL})`}`,
+		data.Definition === undefined || data.Definition.length === 0 ? undefined : `${data.Definition}${data.DefinitionURL === undefined ? '' : ` (${data.DefinitionURL})`}`,
+		...related
+	].filter(Boolean).join('\n');
 
 	return {
 		ok: true,
-		message: message || 'No search results returned.',
+		message: message || 'No DuckDuckGo instant answers returned.',
 		data
+	};
+}
+
+async function tavilySearch(query: string, maxResults: number): Promise<ToolResult> {
+	if (process.env.TAVILY_API_KEY === undefined || process.env.TAVILY_API_KEY.length === 0) {
+		return {
+			ok: false,
+			message: 'Tavily web search requires TAVILY_API_KEY. Use /settings web duckduckgo for no-key search.'
+		};
+	}
+
+	const client = tavily({apiKey: process.env.TAVILY_API_KEY});
+	let result: Awaited<ReturnType<typeof client.search>>;
+
+	try {
+		result = await client.search(query, {
+			maxResults,
+			includeAnswer: true,
+			searchDepth: 'basic'
+		});
+	} catch (error) {
+		return {
+			ok: false,
+			message: `Tavily search failed: ${error instanceof Error ? error.message : String(error)}`
+		};
+	}
+	const results = result.results.map((item, index) => `${index + 1}. ${item.title}\n${item.url}\n${item.content}`).join('\n\n');
+	return {
+		ok: true,
+		message: [result.answer, results].filter(Boolean).join('\n\n')
 	};
 }
 
@@ -79,7 +170,25 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 			}),
 			async execute(input, context) {
 				const filePath = resolveWorkspacePath(context.workingDirectory, input.path);
-				const content = await readFile(filePath, 'utf8');
+				let buffer: Buffer;
+
+				try {
+					buffer = await readFile(filePath);
+				} catch (error) {
+					return {
+						ok: false,
+						message: `Could not read ${input.path}: ${error instanceof Error ? error.message : String(error)}`
+					};
+				}
+
+				if (!isLikelyText(buffer)) {
+					return {
+						ok: false,
+						message: `${input.path} appears to be a non-text or binary file.`
+					};
+				}
+
+				const content = buffer.toString('utf8');
 				return {
 					ok: true,
 					message: withLineNumbers(content)
@@ -205,26 +314,24 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 				query: z.string().describe('Search query'),
 				max_results: z.number().int().positive().max(10).default(5)
 			}),
-			async execute(input) {
+			async execute(input, context) {
 				if (process.env.POLYCODE_MOCK_WEB_SEARCH !== undefined) {
 					return {ok: true, message: process.env.POLYCODE_MOCK_WEB_SEARCH};
 				}
 
-				if (process.env.TAVILY_API_KEY !== undefined && process.env.TAVILY_API_KEY.length > 0) {
-					const client = tavily({apiKey: process.env.TAVILY_API_KEY});
-					const result = await client.search(input.query, {
-						maxResults: input.max_results,
-						includeAnswer: true,
-						searchDepth: 'basic'
-					});
-					const results = result.results.map((item, index) => `${index + 1}. ${item.title}\n${item.url}\n${item.content}`).join('\n\n');
-					return {
-						ok: true,
-						message: [result.answer, results].filter(Boolean).join('\n\n')
-					};
+				const provider = resolveWebSearchProvider(context);
+
+				if (provider === 'tavily') {
+					return tavilySearch(input.query, input.max_results);
 				}
 
-				return duckDuckGoSearch(input.query, input.max_results);
+				if (provider === 'duckduckgo') {
+					return duckDuckGoSearch(input.query, input.max_results, context);
+				}
+
+				return process.env.TAVILY_API_KEY === undefined || process.env.TAVILY_API_KEY.length === 0
+					? duckDuckGoSearch(input.query, input.max_results, context)
+					: tavilySearch(input.query, input.max_results);
 			}
 		},
 		{
@@ -233,12 +340,29 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 			inputSchema: z.object({
 				url: z.string().url().describe('URL to fetch')
 			}),
-			async execute(input) {
-				const response = await fetch(input.url, {
-					headers: {
-						'User-Agent': 'Polycode/0.1'
-					}
-				});
+			async execute(input, context) {
+				let url: URL;
+
+				try {
+					url = new URL(input.url);
+				} catch {
+					return {ok: false, message: `Invalid URL: ${input.url}`};
+				}
+
+				let response: Response;
+
+				try {
+					response = await getFetch(context)(url, {
+						headers: {
+							'User-Agent': 'Polycode/0.1'
+						}
+					});
+				} catch (error) {
+					return {
+						ok: false,
+						message: `Could not fetch ${input.url}: ${error instanceof Error ? error.message : String(error)}`
+					};
+				}
 
 				if (!response.ok) {
 					return {ok: false, message: `Fetch failed with HTTP ${response.status}`};

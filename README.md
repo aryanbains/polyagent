@@ -2,7 +2,7 @@
 
 Polycode is a JavaScript-native multi-agent orchestration framework with a rich terminal GUI. The goal is to bring the multi-agent workflow ideas common in Python agent frameworks into the Node.js and TypeScript ecosystem, with an installable CLI that feels native to developer terminals.
 
-This repository is currently in **Phase 3** of active development. Phase 1 established the installable CLI and terminal shell. Phase 2 added agent definitions, validation, model-provider wiring, chat, and persistent memory. Phase 3 adds the first tool system for files, commands, and web access.
+This repository is currently in **Phase 3.5** of active development. Phase 1 established the installable CLI and terminal shell. Phase 2 added agent definitions, validation, model-provider wiring, chat, and persistent memory. Phase 3 added the first tool system for files, commands, and web access. Phase 3.5 hardens the runtime before Phase 4: structured execution events, explicit execution sessions, stronger tool failure handling, web-search settings, and golden-path regressions.
 
 ## What Works Today
 
@@ -16,6 +16,7 @@ This repository is currently in **Phase 3** of active development. Phase 1 estab
 - `polycode memory` shows memory backend status and embedding count.
 - `polycode --version` prints the installed package version.
 - API keys are not echoed in CLI output and are encrypted before being written to disk.
+- Every agent run emits structured execution events for run/tool start and finish, including agent name, step id, status, timestamps, duration, input, output summary, and optional token counts.
 
 ## Install Locally
 
@@ -49,9 +50,9 @@ polycode
 From there, stay inside the app. Type a request at the bottom prompt and press Enter:
 
 ```text
-› read package.json and summarize this project
-› list all TypeScript files in src
-› create hello.txt with Hello World
+> read package.json and summarize this project
+> list all TypeScript files in src
+> create hello.txt with Hello World
 ```
 
 Tool calls appear in the session transcript as they happen. File writes and shell commands pause the app for `y/n` approval before they run.
@@ -77,6 +78,10 @@ Useful in-app commands:
 - `/agents` lists agents
 - `/agent researcher` switches agent
 - `/memory` toggles the memory panel
+- `/settings` shows runtime settings
+- `/settings web auto` uses Tavily when `TAVILY_API_KEY` exists, otherwise DuckDuckGo Instant Answer
+- `/settings web tavily` forces Tavily search
+- `/settings web duckduckgo` uses no-key DuckDuckGo Instant Answer search
 - `/approve on` auto-approves file writes and shell commands for trusted local work
 - `/approve off` returns to `y/n` prompts
 - `/approve deny` refuses destructive tools
@@ -199,7 +204,49 @@ Agents can call tools listed in their `tools` array. Built-in tools:
 - `web_search(query, max_results?)`
 - `fetch_url(url)`
 
-File and command tools are workspace-scoped. `write_file`, `append_to_file`, and `execute_command` show a preview and require confirmation unless you pass `--yes` or set `POLYCODE_TOOL_APPROVAL=allow`.
+File and command tools are workspace-scoped. `write_file`, `append_to_file`, and `execute_command` show a preview and require confirmation unless you pass `--yes`, set `/approve on` in the terminal app, or set `POLYCODE_TOOL_APPROVAL=allow`.
+
+`web_search` supports:
+
+- `auto`: Tavily when `TAVILY_API_KEY` exists, otherwise DuckDuckGo Instant Answer.
+- `tavily`: Tavily only; fails clearly if `TAVILY_API_KEY` is missing.
+- `duckduckgo`: no-key DuckDuckGo Instant Answer over HTTPS.
+
+Set it in the terminal app:
+
+```text
+/settings web duckduckgo
+/settings web tavily
+/settings web auto
+```
+
+Or from the environment:
+
+```bash
+POLYCODE_WEB_SEARCH_PROVIDER=duckduckgo polycode
+```
+
+On PowerShell:
+
+```powershell
+$env:POLYCODE_WEB_SEARCH_PROVIDER = "duckduckgo"
+polycode
+```
+
+DuckDuckGo Instant Answer is a no-key fallback for summaries, definitions, and related-topic links. It is not a full ranked search-results API, so Tavily remains the better mode for agentic research tasks when available.
+
+## Runtime Events
+
+Phase 3.5 introduces an execution session object for every agent run. Today there is one active agent, but the type system already separates planner and orchestrator descriptors so Phase 4 can add multi-agent scheduling without reshaping the run contract.
+
+Execution events include:
+
+- `run_started`
+- `tool_started`
+- `tool_finished`
+- `run_finished`
+
+Tool events include agent name, run id, step id, tool call id, tool name, input, output summary, success/failure, duration, and timestamps.
 
 ## Development
 
@@ -212,6 +259,8 @@ npm run check
 ```
 
 `npm run check` is the main verification command. It runs TypeScript checks, unit tests, a production build, and CLI e2e tests.
+
+Phase 3.5 golden-path regressions live in `test/phase35.test.ts` and cover repo inspection, file summarization, guarded file modification, command execution, and web docs fetching.
 
 ## Roadmap
 

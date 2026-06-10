@@ -1,3 +1,4 @@
+import {randomUUID} from 'node:crypto';
 import {stepCountIs, streamText, type ModelMessage, type ToolSet} from 'ai';
 import type {AgentDefinition} from '../agents/schema.js';
 import type {PolycodeConfig} from '../domain.js';
@@ -6,6 +7,15 @@ import {createMemoryStore} from '../memory/factory.js';
 import type {MemoryStore} from '../memory/types.js';
 import type {ToolContext} from '../tools/types.js';
 import {createToolSet} from '../tools/registry.js';
+import {
+	createExecutionSession,
+	createRunFinishedEvent,
+	createRunStartedEvent,
+	createToolFinishedEvent,
+	createToolStartedEvent,
+	type ExecutionSession,
+	type RunningToolExecution
+} from '../runtime/execution.js';
 import {buildSystemPrompt} from './system-prompt.js';
 
 export type LlmStreamOptions = {
@@ -14,8 +24,8 @@ export type LlmStreamOptions = {
 	messages: ModelMessage[];
 	system: string;
 	tools?: ToolSet;
-	onToolStart?: (toolName: string, input: unknown) => void;
-	onToolFinish?: (toolName: string, output: unknown, success: boolean) => void;
+	onToolStart?: (toolName: string, input: unknown, toolCallId?: string) => void;
+	onToolFinish?: (toolName: string, output: unknown, success: boolean, toolCallId?: string) => void;
 };
 
 export interface LlmClient {
@@ -70,10 +80,10 @@ export class AiSdkLlmClient implements LlmClient {
 				tools: options.tools,
 				stopWhen: stepCountIs(6),
 				experimental_onToolCallStart: (event) => {
-					options.onToolStart?.(event.toolCall.toolName, event.toolCall.input);
+					options.onToolStart?.(event.toolCall.toolName, event.toolCall.input, event.toolCall.toolCallId);
 				},
 				experimental_onToolCallFinish: (event) => {
-					options.onToolFinish?.(event.toolCall.toolName, event.success ? event.output : event.error, event.success);
+					options.onToolFinish?.(event.toolCall.toolName, event.success ? event.output : event.error, event.success, event.toolCall.toolCallId);
 				}
 			});
 
@@ -93,6 +103,7 @@ export type RunAgentTurnOptions = {
 	conversation?: ModelMessage[];
 	memoryStore?: MemoryStore;
 	llmClient?: LlmClient;
+	session?: ExecutionSession;
 	toolContext?: ToolContext;
 	onToken?: (token: string) => void;
 	onToolStart?: (toolName: string, input: unknown) => void;
@@ -100,6 +111,11 @@ export type RunAgentTurnOptions = {
 };
 
 export async function runAgentTurn(options: RunAgentTurnOptions): Promise<string> {
+	const session = options.session ?? createExecutionSession();
+	const runId = randomUUID();
+	const runStepId = session.nextStepId();
+	const runStartedAt = new Date().toISOString();
+	const runStartedAtMs = Date.now();
 	const memoryStore = options.memoryStore ?? createMemoryStore(options.config);
 	const llmClient = options.llmClient ?? new AiSdkLlmClient();
 	const memories = options.agent.memory_enabled ? await memoryStore.search(options.agent.name, options.message, 5) : [];
@@ -111,18 +127,50 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<string
 	];
 	const tools = options.toolContext === undefined ? undefined : createToolSet(options.agent, options.toolContext);
 	let response = '';
+	const runningTools = new Map<string, RunningToolExecution>();
 
-	for await (const token of llmClient.streamText({
-		config: options.config,
-		agent: options.agent,
-		messages,
-		system,
-		tools,
-		onToolStart: options.onToolStart,
-		onToolFinish: options.onToolFinish
-	})) {
-		response += token;
-		options.onToken?.(token);
+	session.emit(createRunStartedEvent(session, runId, runStepId, options.agent.name, options.message));
+
+	const startTool = (toolName: string, input: unknown, toolCallId = `${runId}:${toolName}:${runningTools.size + 1}`): void => {
+		const {event, runningTool} = createToolStartedEvent(session, runId, options.agent.name, toolCallId, toolName, input);
+		runningTools.set(toolCallId, runningTool);
+		session.emit(event);
+		options.onToolStart?.(toolName, input);
+	};
+
+	const finishTool = (toolName: string, output: unknown, success: boolean, toolCallId?: string): void => {
+		const resolvedToolCallId = toolCallId ?? [...runningTools.values()].reverse().find((tool) => tool.toolName === toolName)?.toolCallId ?? `${runId}:${toolName}:unknown`;
+		const runningTool = runningTools.get(resolvedToolCallId) ?? createToolStartedEvent(session, runId, options.agent.name, resolvedToolCallId, toolName, undefined).runningTool;
+		session.emit(createToolFinishedEvent(session, runId, options.agent.name, runningTool, output, success));
+		runningTools.delete(resolvedToolCallId);
+		options.onToolFinish?.(toolName, output, success);
+	};
+
+	try {
+		for await (const token of llmClient.streamText({
+			config: options.config,
+			agent: options.agent,
+			messages,
+			system,
+			tools,
+			onToolStart: startTool,
+			onToolFinish: finishTool
+		})) {
+			response += token;
+			options.onToken?.(token);
+		}
+	} catch (error) {
+		session.emit(createRunFinishedEvent(
+			session,
+			runId,
+			runStepId,
+			options.agent.name,
+			runStartedAt,
+			runStartedAtMs,
+			false,
+			error instanceof Error ? error.message : String(error)
+		));
+		throw error;
 	}
 
 	conversation.push(
@@ -133,6 +181,8 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<string
 	if (options.agent.memory_enabled) {
 		await memoryStore.add(options.agent.name, `User: ${options.message}\nAssistant: ${response}`);
 	}
+
+	session.emit(createRunFinishedEvent(session, runId, runStepId, options.agent.name, runStartedAt, runStartedAtMs, true, response));
 
 	return response;
 }
