@@ -6,6 +6,7 @@ export type ToolContext = {
 	workingDirectory: string;
 	approvalMode: ToolApprovalMode;
 	onPreview?: (preview: string) => void;
+	requestApproval?: (message: string, preview?: string) => Promise<boolean>;
 };
 
 export type ToolResult = {

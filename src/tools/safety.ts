@@ -56,11 +56,25 @@ function approvalFromEnvironment(): ToolApprovalMode | null {
 }
 
 export async function requestApproval(message: string, context: ToolContext, preview?: string): Promise<boolean> {
-	const mode = approvalFromEnvironment() ?? context.approvalMode;
+	const environmentMode = approvalFromEnvironment();
 
 	if (preview !== undefined) {
 		context.onPreview?.(preview);
 	}
+
+	if (environmentMode === 'allow') {
+		return true;
+	}
+
+	if (environmentMode === 'deny') {
+		return false;
+	}
+
+	if (context.requestApproval !== undefined) {
+		return context.requestApproval(message, preview);
+	}
+
+	const mode = context.approvalMode;
 
 	if (mode === 'allow') {
 		return true;

@@ -9,11 +9,10 @@ This repository is currently in **Phase 3** of active development. Phase 1 estab
 - `polycode init` opens an interactive onboarding wizard.
 - `polycode init --yes ...` supports scripted setup for tests and demos.
 - `polycode init` creates a starter `agents.yaml` in the configured working directory when one does not already exist.
-- `polycode` launches the terminal dashboard.
+- `polycode` launches the terminal app with an in-app prompt composer.
 - `polycode status` prints the current local configuration summary.
 - `polycode validate` validates `agents.yaml`, `agents.yml`, or `agents.json`.
-- `polycode chat <agent-name>` chats with a configured agent.
-- `polycode run "<task>"` runs a one-shot task with tool calls visible in the terminal.
+- `polycode chat <agent-name>` and `polycode run "<task>"` remain available for scripts and direct testing.
 - `polycode memory` shows memory backend status and embedding count.
 - `polycode --version` prints the installed package version.
 - API keys are not echoed in CLI output and are encrypted before being written to disk.
@@ -41,21 +40,21 @@ polycode init
 polycode validate
 ```
 
-Then launch the dashboard:
+Then launch the terminal app:
 
 ```bash
 polycode
 ```
 
-The default CLI flow is:
+From there, stay inside the app. Type a request at the bottom prompt and press Enter:
 
-```bash
-polycode init
-polycode validate
-polycode
-polycode chat researcher
-polycode run "read package.json and summarize this project"
+```text
+› read package.json and summarize this project
+› list all TypeScript files in src
+› create hello.txt with Hello World
 ```
+
+Tool calls appear in the session transcript as they happen. File writes and shell commands pause the app for `y/n` approval before they run.
 
 Edit the generated `agents.yaml` in your configured working directory when you want custom agents:
 
@@ -72,36 +71,25 @@ agents:
     memory_enabled: true
 ```
 
-Chat with an agent:
+Useful in-app commands:
 
-```bash
-polycode chat researcher
-```
+- `/help` shows commands
+- `/agents` lists agents
+- `/agent researcher` switches agent
+- `/memory` toggles the memory panel
+- `/approve on` auto-approves file writes and shell commands for trusted local work
+- `/approve off` returns to `y/n` prompts
+- `/approve deny` refuses destructive tools
+- `/clear` clears the visible session transcript
+- `/exit` quits
 
-Or send one noninteractive message:
+The direct commands still exist for scripts and tests:
 
 ```bash
 polycode chat researcher --message "What did we discuss before?"
-```
-
-Run a task against the first configured agent:
-
-```bash
 polycode run "read my package.json and tell me what dependencies I am using"
-```
-
-Use `--yes` to auto-approve write and command tools during trusted local demos:
-
-```bash
 polycode run --yes "create hello.txt with Hello World"
 ```
-
-Useful keyboard controls in the dashboard:
-
-- `q` quits
-- `?` toggles help
-- `m` toggles the memory panel
-- arrows navigate panels and agents
 
 For automated setup:
 

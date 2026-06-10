@@ -55,7 +55,7 @@ describe('Dashboard', () => {
 		expect(lastFrame()).toContain('Needs attention');
 	});
 
-	it('renders the Phase 2 terminal shell with configured agents', () => {
+	it('renders the terminal app with configured agents and a prompt composer', () => {
 		const {lastFrame} = render(<Dashboard agents={agents} config={config} memoryStats={{
 			backend: 'local',
 			totalEmbeddings: 2,
@@ -66,6 +66,7 @@ describe('Dashboard', () => {
 		expect(lastFrame()).toContain('Polycode v0.1.0');
 		expect(lastFrame()).toContain('Agents');
 		expect(lastFrame()).toContain('researcher idle');
-		expect(lastFrame()).toContain('q quit');
+		expect(lastFrame()).toContain('/help for commands');
+		expect(lastFrame()).toContain('Ask researcher to');
 	});
 });
