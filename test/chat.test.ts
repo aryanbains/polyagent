@@ -1,8 +1,9 @@
 import {describe, expect, it} from 'vitest';
 import type {AgentDefinition} from '../src/agents/schema.js';
-import {runAgentTurn, type LlmClient, type LlmStreamOptions} from '../src/chat/run.js';
+import {AiSdkLlmClient, LlmCallError, runAgentTurn, type LlmClient, type LlmStreamOptions} from '../src/chat/run.js';
 import type {PolycodeConfig} from '../src/domain.js';
 import {LocalVectorMemoryStore} from '../src/memory/local-store.js';
+import {HashEmbedder} from '../src/memory/embedder.js';
 import {mkdtemp, rm} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,17 +35,20 @@ const config: PolycodeConfig = {
 
 class RecordingLlmClient implements LlmClient {
 	systems: string[] = [];
+	messages: LlmStreamOptions['messages'][] = [];
 
 	async *streamText(options: LlmStreamOptions): AsyncIterable<string> {
 		this.systems.push(options.system);
-		yield `response to ${options.message}`;
+		this.messages.push(options.messages);
+		const lastMessage = options.messages.at(-1);
+		yield `response to ${typeof lastMessage?.content === 'string' ? lastMessage.content : 'message'}`;
 	}
 }
 
 describe('runAgentTurn', () => {
 	it('stores exchanges and injects relevant memory on later turns', async () => {
 		const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'polycode-chat-'));
-		const memoryStore = LocalVectorMemoryStore.forProject(temporaryDirectory);
+		const memoryStore = new LocalVectorMemoryStore(path.join(temporaryDirectory, '.polycode', 'memory.json'), new HashEmbedder());
 		const llmClient = new RecordingLlmClient();
 
 		try {
@@ -68,5 +72,50 @@ describe('runAgentTurn', () => {
 		} finally {
 			await rm(temporaryDirectory, {force: true, recursive: true});
 		}
+	});
+
+	it('passes in-session conversation history to the LLM', async () => {
+		const llmClient = new RecordingLlmClient();
+		const conversation: LlmStreamOptions['messages'] = [];
+		const agentWithoutMemory = {
+			...agent,
+			memory_enabled: false
+		};
+
+		await runAgentTurn({
+			config,
+			agent: agentWithoutMemory,
+			message: 'My project codename is Cedar.',
+			conversation,
+			llmClient
+		});
+		await runAgentTurn({
+			config,
+			agent: agentWithoutMemory,
+			message: 'What is the codename?',
+			conversation,
+			llmClient
+		});
+
+		expect(llmClient.messages[1]).toEqual([
+			{role: 'user', content: 'My project codename is Cedar.'},
+			{role: 'assistant', content: 'response to My project codename is Cedar.'},
+			{role: 'user', content: 'What is the codename?'}
+		]);
+	});
+
+	it('normalizes provider failures into friendly LLM call errors', async () => {
+		const llmClient = new AiSdkLlmClient();
+
+		await expect(async () => {
+			for await (const _token of llmClient.streamText({
+				config,
+				agent,
+				messages: [{role: 'user', content: 'hello'}],
+				system: 'test'
+			})) {
+				// consume stream
+			}
+		}).rejects.toThrow(LlmCallError);
 	});
 });

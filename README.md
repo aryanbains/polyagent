@@ -137,6 +137,20 @@ polycode memory --clear
 polycode memory --agent researcher --clear
 ```
 
+Polycode uses local semantic embeddings by default through `@xenova/transformers` and `Xenova/all-MiniLM-L6-v2`. The first memory operation may download the model. For fast offline tests, use the deterministic hash embedder:
+
+```bash
+POLYCODE_EMBEDDINGS=hash POLYCODE_MEMORY_DRIVER=local polycode chat researcher --message "Remember Vitest"
+```
+
+On PowerShell:
+
+```powershell
+$env:POLYCODE_EMBEDDINGS = "hash"
+$env:POLYCODE_MEMORY_DRIVER = "local"
+polycode chat researcher --message "Remember Vitest"
+```
+
 To use ChromaDB, start a local Chroma server first. If it is not reachable, Polycode reports a friendly error instead of printing a stack trace.
 
 ## LLM Providers

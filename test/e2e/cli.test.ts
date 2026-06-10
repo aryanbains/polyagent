@@ -112,11 +112,13 @@ describe('polycode cli', () => {
 		});
 		const chatResult = await runCli(['chat', 'researcher', '--message', 'remember Vitest'], {
 			POLYCODE_HOME: home,
+			POLYCODE_EMBEDDINGS: 'hash',
 			POLYCODE_MEMORY_DRIVER: 'local',
 			POLYCODE_MOCK_LLM_RESPONSE: 'Vitest remembered.'
 		});
 		const memoryResult = await runCli(['memory'], {
 			POLYCODE_HOME: home,
+			POLYCODE_EMBEDDINGS: 'hash',
 			POLYCODE_MEMORY_DRIVER: 'local'
 		});
 
@@ -190,10 +192,53 @@ describe('polycode cli', () => {
 		const result = await runCli(['chat', 'researcher', '--message', 'hello'], {
 			CHROMA_PORT: '65530',
 			POLYCODE_HOME: home,
+			POLYCODE_EMBEDDINGS: 'hash',
 			POLYCODE_MOCK_LLM_RESPONSE: 'hello'
 		});
 
 		expect(result.exitCode).toBe(1);
 		expect(result.stderr).toContain('ChromaDB is not reachable');
+	});
+
+	it('chats successfully when memory is skipped', async () => {
+		const home = path.join(temporaryRoot, 'home');
+		const workspace = path.join(temporaryRoot, 'workspace');
+		await runCli([
+			'init',
+			'--yes',
+			'--project-name',
+			'Demo',
+			'--working-directory',
+			workspace,
+			'--provider',
+			'openai',
+			'--api-key',
+			'test-key',
+			'--memory',
+			'skip'
+		], {
+			POLYCODE_HOME: home
+		});
+		await writeFile(path.join(workspace, 'agents.yaml'), [
+			'agents:',
+			'  - name: researcher',
+			'    role: Research specialist',
+			'    goal: Find accurate information',
+			'    memory_enabled: true'
+		].join('\n'));
+
+		const chatResult = await runCli(['chat', 'researcher', '--message', 'hello'], {
+			POLYCODE_HOME: home,
+			POLYCODE_MOCK_LLM_RESPONSE: 'skip memory works'
+		});
+		const memoryResult = await runCli(['memory'], {
+			POLYCODE_HOME: home
+		});
+
+		expect(chatResult.exitCode).toBe(0);
+		expect(chatResult.stdout).toContain('skip memory works');
+		expect(memoryResult.exitCode).toBe(0);
+		expect(memoryResult.stdout).toContain('Backend: skip');
+		expect(memoryResult.stdout).toContain('Embeddings: 0');
 	});
 });

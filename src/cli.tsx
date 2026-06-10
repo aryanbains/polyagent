@@ -2,6 +2,7 @@ import path from 'node:path';
 import {createInterface} from 'node:readline/promises';
 import {realpathSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
+import type {ModelMessage} from 'ai';
 import React from 'react';
 import {Command, Option} from 'commander';
 import {render} from 'ink';
@@ -126,12 +127,14 @@ async function runChat(agentName: string, options: ChatCommandOptions): Promise<
 
 	const {agents} = await loadAgents({workingDirectory: config.project.workingDirectory, requireFile: true});
 	const agent = findAgent(agents, agentName);
+	const conversation: ModelMessage[] = [];
 
 	if (options.message !== undefined) {
 		await runAgentTurn({
 			config,
 			agent,
 			message: options.message,
+			conversation,
 			onToken: (token) => {
 				process.stdout.write(token);
 			}
@@ -164,6 +167,7 @@ async function runChat(agentName: string, options: ChatCommandOptions): Promise<
 				config,
 				agent,
 				message,
+				conversation,
 				onToken: (token) => {
 					process.stdout.write(token);
 				}

@@ -44,10 +44,29 @@ export class TransformersEmbedder implements Embedder {
 	}
 }
 
+export class FallbackEmbedder implements Embedder {
+	constructor(
+		private readonly primary: Embedder,
+		private readonly fallback: Embedder
+	) {}
+
+	async embed(text: string): Promise<number[]> {
+		try {
+			return await this.primary.embed(text);
+		} catch {
+			return this.fallback.embed(text);
+		}
+	}
+}
+
 export function createEmbedder(): Embedder {
+	if (process.env.POLYCODE_EMBEDDINGS === 'hash') {
+		return new HashEmbedder();
+	}
+
 	if (process.env.POLYCODE_EMBEDDINGS === 'transformers') {
 		return new TransformersEmbedder();
 	}
 
-	return new HashEmbedder();
+	return new FallbackEmbedder(new TransformersEmbedder(), new HashEmbedder());
 }

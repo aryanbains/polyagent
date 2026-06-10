@@ -187,7 +187,7 @@ export function Dashboard({agents = [], agentsError = null, config, memoryStats,
 
 			<Box justifyContent="space-between" paddingX={1}>
 				<Text inverse>q quit | ? help | m memory | arrows navigate</Text>
-				<Text inverse>Phase 2 shell ready</Text>
+				<Text inverse>Ready</Text>
 			</Box>
 		</Box>
 	);
