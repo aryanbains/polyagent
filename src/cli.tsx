@@ -1,3 +1,5 @@
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import React from 'react';
 import {Command, Option} from 'commander';
 import {render} from 'ink';
@@ -145,4 +147,16 @@ export async function main(argv = process.argv): Promise<void> {
 	}
 }
 
-await main();
+function isDirectExecution(): boolean {
+	const entryPoint = process.argv[1];
+
+	if (entryPoint === undefined) {
+		return false;
+	}
+
+	return fileURLToPath(import.meta.url) === path.resolve(entryPoint);
+}
+
+if (isDirectExecution()) {
+	await main();
+}

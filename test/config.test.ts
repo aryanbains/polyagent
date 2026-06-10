@@ -1,4 +1,4 @@
-import {mkdtemp, readFile, rm} from 'node:fs/promises';
+import {mkdtemp, readFile, rm, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
@@ -42,5 +42,27 @@ describe('config store', () => {
 		expect(rawConfig).not.toContain(secret);
 		expect(loadedConfig?.llm.provider).toBe('openai');
 		expect(decryptSecret(loadedConfig?.llm.apiKey ?? null)).toBe(secret);
+	});
+
+	it('shows a friendly error when an API key cannot be decrypted', async () => {
+		const {configPath} = await initializeConfig({
+			projectName: 'Demo',
+			workingDirectory: temporaryHome,
+			provider: 'openai',
+			apiKey: 'phase-one-secret',
+			memoryBackend: 'skip'
+		});
+		const config = JSON.parse(await readFile(configPath, 'utf8')) as {
+			llm: {
+				apiKey: {
+					tag: string;
+				};
+			};
+		};
+
+		config.llm.apiKey.tag = Buffer.alloc(16).toString('base64');
+		await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+
+		await expect(loadConfig()).rejects.toThrow('API key could not be decrypted. Run polycode init to reconfigure.');
 	});
 });

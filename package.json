@@ -15,8 +15,8 @@
   },
   "scripts": {
     "build": "tsup",
-    "dev": "tsx src/cli.ts",
-    "test": "vitest run test/config.test.ts test/dashboard.test.tsx",
+    "dev": "tsx src/cli.tsx",
+    "test": "vitest run test/config.test.ts test/cli.test.ts test/dashboard.test.tsx",
     "test:e2e": "npm run build && vitest run test/e2e",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test && npm run test:e2e"
@@ -30,7 +30,7 @@
     "orchestration",
     "terminal"
   ],
-  "author": "",
+  "author": "Aryan",
   "license": "MIT",
   "dependencies": {
     "boxen": "^8.0.1",

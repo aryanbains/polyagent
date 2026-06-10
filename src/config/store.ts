@@ -2,7 +2,14 @@ import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME, type InitOptions, type PolycodeConfig} from '../domain.js';
-import {encryptSecret} from './crypto.js';
+import {decryptSecret, encryptSecret} from './crypto.js';
+
+export class ConfigDecryptionError extends Error {
+	constructor() {
+		super('API key could not be decrypted. Run polycode init to reconfigure.');
+		this.name = 'ConfigDecryptionError';
+	}
+}
 
 export function getPolycodeHome(): string {
 	return process.env.POLYCODE_HOME ?? path.join(os.homedir(), CONFIG_DIRECTORY_NAME);
@@ -46,7 +53,15 @@ export async function saveConfig(config: PolycodeConfig): Promise<string> {
 export async function loadConfig(): Promise<PolycodeConfig | null> {
 	try {
 		const rawConfig = await readFile(getConfigPath(), 'utf8');
-		return JSON.parse(rawConfig) as PolycodeConfig;
+		const config = JSON.parse(rawConfig) as PolycodeConfig;
+
+		try {
+			decryptSecret(config.llm.apiKey);
+		} catch {
+			throw new ConfigDecryptionError();
+		}
+
+		return config;
 	} catch (error) {
 		if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
 			return null;
