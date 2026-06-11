@@ -3,7 +3,7 @@ import path from 'node:path';
 import PQueue from 'p-queue';
 import type {ModelMessage} from 'ai';
 import type {AgentDefinition, OrchestratorConfig} from '../agents/schema.js';
-import {runAgentTurn, type LlmClient} from '../chat/run.js';
+import {AiSdkLlmClient, runAgentTurn, type LlmClient} from '../chat/run.js';
 import type {PolycodeConfig} from '../domain.js';
 import {
 	createExecutionSession,
@@ -13,9 +13,8 @@ import {multiAgentOrchestrator} from '../runtime/orchestration.js';
 import {resolveWorkspacePath, writeTextFile} from '../tools/safety.js';
 import type {ToolApprovalMode, WebSearchProvider} from '../tools/types.js';
 import {createAgentMessageBus, type AgentMessage} from './message-bus.js';
-import {createPlannerDescriptor} from './planner.js';
+import {createPlannerDescriptor, planMultiAgentTaskDynamically, type MultiAgentPlan, type MultiAgentPlanStep} from './planner.js';
 import {type AgentStepRecord, createSessionId, type RecordedSession, saveRecordedSession} from './session-recorder.js';
-import {planMultiAgentTask, type MultiAgentPlan, type MultiAgentPlanStep} from './planner.js';
 
 export type AgentRuntimeStatus = 'idle' | 'running' | 'succeeded' | 'failed';
 
@@ -37,6 +36,7 @@ export type MultiAgentRunOptions = {
 	approvalMode: ToolApprovalMode;
 	webSearchProvider?: WebSearchProvider;
 	llmClient?: LlmClient;
+	plan?: MultiAgentPlan;
 	callbacks?: MultiAgentRunCallbacks;
 	saveSession?: boolean;
 };
@@ -111,7 +111,14 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 	const agentOutputs = new Map<string, ModelMessage[]>();
 	const stepRecords = new Map<string, AgentStepRecord>();
 	const callbacks = options.callbacks;
-	const plan = planMultiAgentTask(options.task, options.agents, options.orchestrator);
+	const llmClient = options.llmClient ?? new AiSdkLlmClient();
+	const plan = options.plan ?? await planMultiAgentTaskDynamically({
+		config: options.config,
+		task: options.task,
+		agents: options.agents,
+		orchestrator: options.orchestrator,
+		llmClient
+	});
 	const queue = new PQueue({concurrency: options.orchestrator.max_parallel_agents});
 
 	messageBus.on('message', (message) => {
@@ -189,7 +196,7 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 				agent,
 				message: prompt,
 				conversation,
-				llmClient: options.llmClient,
+				llmClient,
 				session: executionSession,
 				toolContext: {
 					workingDirectory: options.config.project.workingDirectory,

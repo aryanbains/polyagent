@@ -1,6 +1,6 @@
 import type {AgentDefinition} from '../agents/schema.js';
 
-export type PlannerKind = 'single_agent' | 'plan_and_execute' | 'react' | 'sequential';
+export type PlannerKind = 'single_agent' | 'plan_and_execute' | 'react' | 'sequential' | 'dynamic';
 export type OrchestratorKind = 'single_agent' | 'multi_agent';
 
 export type PlannerDescriptor = {

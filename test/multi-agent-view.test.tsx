@@ -18,6 +18,7 @@ const session: RecordedSession = {
 		task: 'Research testing frameworks and write a report',
 		strategy: 'plan_and_execute',
 		createdAt: '2026-01-01T00:00:00.000Z',
+		source: 'static',
 		steps: [
 			{id: 'research', title: 'Research', agentName: 'researcher', prompt: 'Research', dependsOn: [], status: 'pending'},
 			{id: 'analysis', title: 'Analyze', agentName: 'analyst', prompt: 'Analyze', dependsOn: [], status: 'pending'},
@@ -42,13 +43,40 @@ const session: RecordedSession = {
 	}
 };
 
+function makeStressSession(messageCount: number): RecordedSession {
+	return {
+		...session,
+		id: `stress-${messageCount}`,
+		task: 'Run three agents with concurrent streaming output and a very long task title that should stay inside the terminal layout',
+		messages: Array.from({length: messageCount}, (_, index) => ({
+			id: `message-${index}`,
+			from: index % 3 === 0 ? 'researcher' : index % 3 === 1 ? 'analyst' : 'writer',
+			to: index % 2 === 0 ? 'orchestrator' : 'broadcast',
+			type: index % 5 === 0 ? 'request' : index % 5 === 1 ? 'response' : 'status',
+			payload: {
+				text: `message payload ${index}`
+			},
+			timestamp: new Date(`2026-01-01T00:00:${String(index % 60).padStart(2, '0')}.000Z`)
+		})),
+		steps: session.steps.map((step, index) => ({
+			...step,
+			output: `${step.output} ${'streamed output chunk '.repeat(30 + index * 10)}`
+		})),
+		stats: {
+			agentsUsed: 3,
+			toolsCalled: 12,
+			messages: messageCount
+		}
+	};
+}
+
 describe('MultiAgentSessionView', () => {
 	afterEach(() => {
 		cleanup();
 	});
 
 	it('keeps the three-agent terminal layout readable', () => {
-		const {lastFrame} = render(<MultiAgentSessionView session={session} version="0.1.0" />);
+		const {lastFrame} = render(<MultiAgentSessionView interactive={false} session={session} version="0.1.0" />);
 
 		expect(lastFrame()).toContain('Multi-agent 3/3');
 		expect(lastFrame()).toContain('researcher succeeded');
@@ -56,5 +84,22 @@ describe('MultiAgentSessionView', () => {
 		expect(lastFrame()).toContain('writer succeeded');
 		expect(lastFrame()).toContain('Messages');
 		expect(lastFrame()).toContain('agents 3');
+	});
+
+	it('survives stress rerenders with dense three-agent message traffic', () => {
+		const {lastFrame, rerender} = render(<MultiAgentSessionView interactive={false} session={makeStressSession(10)} version="0.1.0" />);
+
+		for (const messageCount of [20, 40, 60, 90]) {
+			rerender(<MultiAgentSessionView interactive={false} session={makeStressSession(messageCount)} version="0.1.0" />);
+		}
+
+		const frame = lastFrame() ?? '';
+		const longestLine = Math.max(...frame.split('\n').map((line) => line.length));
+
+		expect(frame).toContain('Multi-agent 3/3');
+		expect(frame).toContain('Messages');
+		expect(frame).toContain('agents 3 | tools 12 | messages 90');
+		expect(frame).not.toContain('ERROR');
+		expect(longestLine).toBeLessThanOrEqual(140);
 	});
 });

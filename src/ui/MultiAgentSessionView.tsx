@@ -6,6 +6,7 @@ import type {RecordedSession} from '../orchestration/session-recorder.js';
 import {Panel} from './Panel.js';
 
 type MultiAgentSessionViewProps = {
+	interactive?: boolean;
 	session: RecordedSession;
 	version: string;
 };
@@ -41,7 +42,7 @@ function useTerminalSize(): [number, number] {
 	return size;
 }
 
-export function MultiAgentSessionView({session, version}: MultiAgentSessionViewProps): JSX.Element {
+export function MultiAgentSessionView({interactive = true, session, version}: MultiAgentSessionViewProps): JSX.Element {
 	const {exit} = useApp();
 	const {isRawModeSupported} = useStdin();
 	const [columns, rows] = useTerminalSize();
@@ -56,7 +57,7 @@ export function MultiAgentSessionView({session, version}: MultiAgentSessionViewP
 		if (input === 'q' || (key.ctrl && input === 'c')) {
 			exit();
 		}
-	}, {isActive: isRawModeSupported === true});
+	}, {isActive: interactive && isRawModeSupported === true});
 
 	useEffect(() => {
 		if (isRawModeSupported) {

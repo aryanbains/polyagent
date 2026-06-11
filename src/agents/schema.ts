@@ -11,7 +11,7 @@ export const AgentDefinitionSchema = z.object({
 }).strict();
 
 export const OrchestratorConfigSchema = z.object({
-	strategy: z.enum(['plan_and_execute', 'react', 'sequential']).default('plan_and_execute'),
+	strategy: z.enum(['plan_and_execute', 'react', 'sequential', 'dynamic']).default('plan_and_execute'),
 	max_parallel_agents: z.number().int().positive().max(10).default(3),
 	max_iterations: z.number().int().positive().max(100).default(10)
 }).strict();

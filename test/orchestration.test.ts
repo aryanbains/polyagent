@@ -134,6 +134,77 @@ describe('Phase 4 orchestration', () => {
 		expect(result.session.messages.some((message) => message.type === 'response')).toBe(true);
 	});
 
+	it('uses an LLM-generated dynamic plan when strategy is dynamic', async () => {
+		const llmClient: LlmClient = {
+			async *streamText(options: LlmStreamOptions): AsyncIterable<string> {
+				if (options.agent.name === 'orchestrator') {
+					yield JSON.stringify({
+						steps: [
+							{
+								id: 'inspect_repo',
+								title: 'Inspect repository structure',
+								agentName: 'analyst',
+								prompt: 'Inspect the repository and identify important files.',
+								dependsOn: []
+							},
+							{
+								id: 'write_summary',
+								title: 'Write project summary',
+								agentName: 'writer',
+								prompt: 'Write a concise project summary using the inspection.',
+								dependsOn: ['inspect_repo']
+							}
+						]
+					});
+					return;
+				}
+
+				yield `handled by ${options.agent.name}`;
+			}
+		};
+
+		const result = await runMultiAgentTask({
+			config: config(),
+			agents,
+			orchestrator: {
+				...orchestrator,
+				strategy: 'dynamic'
+			},
+			task: 'Inspect this repository and write a summary',
+			approvalMode: 'allow',
+			llmClient,
+			saveSession: false
+		});
+
+		expect(result.plan.source).toBe('dynamic');
+		expect(result.plan.steps.map((step) => step.id)).toEqual(['inspect_repo', 'write_summary']);
+		expect(result.session.messages.some((message) => message.from === 'writer' && message.to === 'analyst' && message.type === 'request')).toBe(true);
+	});
+
+	it('falls back to the static plan when dynamic planner output is malformed', async () => {
+		const llmClient: LlmClient = {
+			async *streamText(options: LlmStreamOptions): AsyncIterable<string> {
+				yield options.agent.name === 'orchestrator' ? 'not json' : 'fallback step output';
+			}
+		};
+
+		const result = await runMultiAgentTask({
+			config: config(),
+			agents,
+			orchestrator: {
+				...orchestrator,
+				strategy: 'dynamic'
+			},
+			task: 'Do something open ended',
+			approvalMode: 'allow',
+			llmClient,
+			saveSession: false
+		});
+
+		expect(result.plan.source).toBe('fallback');
+		expect(result.plan.steps.map((step) => step.id)).toEqual(['research', 'analysis', 'synthesis']);
+	});
+
 	it('forces sequential execution when max_parallel_agents is 1', async () => {
 		const llmClient = new DelayedLlmClient();
 

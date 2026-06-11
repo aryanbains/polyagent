@@ -276,7 +276,19 @@ Current strategies:
 
 - `plan_and_execute`: creates research, analysis, and synthesis steps, then schedules dependency-ready work.
 - `sequential`: forces a strict dependency chain.
+- `dynamic`: asks the LLM planner to return a task-specific JSON plan, validates it, and falls back to the static plan if malformed.
 - `react`: accepted in config for forward compatibility; currently uses the same planner shape as `plan_and_execute`.
+
+Dynamic planning example:
+
+```yaml
+orchestrator:
+  strategy: dynamic
+  max_parallel_agents: 3
+  max_iterations: 8
+```
+
+The dynamic planner receives the task plus available agent names, roles, and goals. It must return JSON plan steps with `id`, `title`, `agentName`, `prompt`, and `dependsOn`. Polycode sanitizes the result, removes invalid dependencies, rejects cycles, and uses the static research/analysis/synthesis plan as a fallback if the LLM output is not valid JSON.
 
 The Phase 4 message bus validates every inter-agent message with zod. Messages are stored in the session history:
 
@@ -319,7 +331,7 @@ npm run check
 
 `npm run check` is the main verification command. It runs TypeScript checks, unit tests, a production build, and CLI e2e tests.
 
-Phase 3.5 golden-path regressions live in `test/phase35.test.ts` and cover repo inspection, file summarization, guarded file modification, command execution, and web docs fetching. Phase 4 orchestration tests live in `test/orchestration.test.ts` and cover message passing, graceful fallback, sequential vs parallel scheduling, report creation, and session replay loading.
+Phase 3.5 golden-path regressions live in `test/phase35.test.ts` and cover repo inspection, file summarization, guarded file modification, command execution, and web docs fetching. Phase 4 orchestration tests live in `test/orchestration.test.ts` and cover message passing, dynamic planning, dynamic fallback, graceful fallback, sequential vs parallel scheduling, report creation, and session replay loading. `test/multi-agent-view.test.tsx` includes a dense rerender stress test for the three-agent terminal layout.
 
 ## Roadmap
 

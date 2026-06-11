@@ -11,7 +11,7 @@ import chalk from 'chalk';
 import boxen from 'boxen';
 import {findAgent, loadAgents} from './agents/load.js';
 import {AgentConfigError} from './agents/schema.js';
-import {runAgentTurn} from './chat/run.js';
+import {AiSdkLlmClient, runAgentTurn} from './chat/run.js';
 import {APP_NAME, COMMAND_NAME, MEMORY_BACKENDS, PROVIDERS, type InitOptions, type MemoryBackend, type Provider} from './domain.js';
 import {createMemoryStore, getMemoryStats} from './memory/factory.js';
 import {ChromaUnavailableError} from './memory/chroma-store.js';
@@ -19,7 +19,7 @@ import {summarizeToolOutput} from './tools/registry.js';
 import type {ToolApprovalMode} from './tools/types.js';
 import {runMultiAgentTask} from './orchestration/run.js';
 import {loadRecordedSession} from './orchestration/session-recorder.js';
-import {planMultiAgentTask, type MultiAgentPlan} from './orchestration/planner.js';
+import {planMultiAgentTaskDynamically, type MultiAgentPlan} from './orchestration/planner.js';
 import {Dashboard} from './ui/Dashboard.js';
 import {InitWizard} from './ui/InitWizard.js';
 import {MultiAgentSessionView} from './ui/MultiAgentSessionView.js';
@@ -110,7 +110,7 @@ function printToolFinish(toolName: string, output: unknown, success: boolean): v
 }
 
 function printPlan(plan: MultiAgentPlan): void {
-	console.log(chalk.bold(`Plan ${plan.id}`));
+	console.log(chalk.bold(`Plan ${plan.id} (${plan.source})`));
 
 	for (const step of plan.steps) {
 		const dependencyText = step.dependsOn.length === 0 ? 'none' : step.dependsOn.join(', ');
@@ -270,7 +270,14 @@ async function runTask(task: string, options: RunCommandOptions): Promise<void> 
 			max_iterations: 10
 		};
 		let approved = true;
-		const plan = planMultiAgentTask(task, agents, effectiveOrchestrator);
+		const llmClient = new AiSdkLlmClient();
+		const plan = await planMultiAgentTaskDynamically({
+			config,
+			task,
+			agents,
+			orchestrator: effectiveOrchestrator,
+			llmClient
+		});
 		printPlan(plan);
 
 		if (process.stdin.isTTY === true && options.yes !== true) {
@@ -290,7 +297,9 @@ async function runTask(task: string, options: RunCommandOptions): Promise<void> 
 			agents,
 			orchestrator: effectiveOrchestrator,
 			task,
+			plan,
 			approvalMode: getApprovalMode(options.yes),
+			llmClient,
 			callbacks: {
 				onMessage: (message) => {
 					console.log(chalk.gray(`[${message.type}] ${message.from} -> ${message.to}`));
