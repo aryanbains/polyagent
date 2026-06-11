@@ -11,7 +11,7 @@ import {
 } from '../runtime/execution.js';
 import {multiAgentOrchestrator} from '../runtime/orchestration.js';
 import {resolveWorkspacePath, writeTextFile} from '../tools/safety.js';
-import type {ToolApprovalMode, WebSearchProvider} from '../tools/types.js';
+import type {ToolApprovalMode, ToolContext, WebSearchProvider} from '../tools/types.js';
 import {createAgentMessageBus, type AgentMessage} from './message-bus.js';
 import {createPlannerDescriptor, planMultiAgentTaskDynamically, type MultiAgentPlan, type MultiAgentPlanStep} from './planner.js';
 import {type AgentStepRecord, createSessionId, type RecordedSession, saveRecordedSession} from './session-recorder.js';
@@ -37,6 +37,7 @@ export type MultiAgentRunOptions = {
 	webSearchProvider?: WebSearchProvider;
 	llmClient?: LlmClient;
 	plan?: MultiAgentPlan;
+	toolContext?: Pick<ToolContext, 'onPreview' | 'requestApproval'>;
 	callbacks?: MultiAgentRunCallbacks;
 	saveSession?: boolean;
 };
@@ -201,7 +202,9 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 				toolContext: {
 					workingDirectory: options.config.project.workingDirectory,
 					approvalMode: options.approvalMode,
-					webSearchProvider: options.webSearchProvider
+					webSearchProvider: options.webSearchProvider,
+					onPreview: options.toolContext?.onPreview,
+					requestApproval: options.toolContext?.requestApproval
 				},
 				onToken: (token) => {
 					callbacks?.onToken?.(agent.name, token);

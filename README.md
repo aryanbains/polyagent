@@ -9,7 +9,7 @@ This repository is currently in **Phase 4** of active development. Phase 1 estab
 - `polycode init` opens an interactive onboarding wizard.
 - `polycode init --yes ...` supports scripted setup for tests and demos.
 - `polycode init` creates a starter `agents.yaml` in the configured working directory when one does not already exist.
-- `polycode` launches the terminal app with an in-app prompt composer.
+- `polycode` launches the terminal app with an in-app prompt composer, agent controls, settings, and multi-agent mode.
 - `polycode status` prints the current local configuration summary.
 - `polycode validate` validates `agents.yaml`, `agents.yml`, or `agents.json`.
 - `polycode chat <agent-name>` and `polycode run "<task>"` remain available for scripts and direct testing.
@@ -57,9 +57,19 @@ From there, stay inside the app. Type a request at the bottom prompt and press E
 > create hello.txt with Hello World
 ```
 
-Tool calls appear in the session transcript as they happen. File writes and shell commands pause the app for `y/n` approval before they run.
+Tool activity appears in compact form while a run is active, then collapses into a "Steps taken" summary above the final answer. File writes and shell commands pause the app for `y/n` approval before they run.
 
-Edit the generated `agents.yaml` in your configured working directory when you want custom agents:
+Press `/` in the prompt to open searchable actions. The list filters as you type, so `/set` finds Settings, `/agent` finds agent creation, and `/multi` switches to multi-agent mode.
+
+- Mouse click `+ New agent`: create an agent inside the terminal UI
+- Mouse wheel over the conversation panel: scroll the transcript
+- `PageUp` / `PageDown`: keyboard-scroll the session transcript
+- `Esc`: close popups
+- `Ctrl+C`: quit
+
+The Settings popup controls run mode, web search provider, approvals, planner strategy, and memory visibility without leaving the app. The `+ New agent` control writes or updates `agents.yaml` for you. Single-letter shortcuts are intentionally avoided so normal prompts like `search this repo` type normally.
+
+The generated `agents.yaml` is still the durable project config and can be versioned:
 
 ```yaml
 orchestrator:
@@ -83,21 +93,7 @@ agents:
     tools: [read_file, write_file, append_to_file]
 ```
 
-Useful in-app commands:
-
-- `/help` shows commands
-- `/agents` lists agents
-- `/agent researcher` switches agent
-- `/memory` toggles the memory panel
-- `/settings` shows runtime settings
-- `/settings web auto` uses Tavily when `TAVILY_API_KEY` exists, otherwise DuckDuckGo Instant Answer
-- `/settings web tavily` forces Tavily search
-- `/settings web duckduckgo` uses no-key DuckDuckGo Instant Answer search
-- `/approve on` auto-approves file writes and shell commands for trusted local work
-- `/approve off` returns to `y/n` prompts
-- `/approve deny` refuses destructive tools
-- `/clear` clears the visible session transcript
-- `/exit` quits
+Slash actions available in the app include switching run mode, creating agents, opening settings, validating agents, toggling memory, clearing the session, and exiting.
 
 The direct commands still exist for scripts and tests:
 
@@ -234,16 +230,16 @@ File and command tools are workspace-scoped. `write_file`, `append_to_file`, and
 
 `web_search` supports:
 
-- `auto`: Tavily when `TAVILY_API_KEY` exists, otherwise DuckDuckGo Instant Answer.
+- `auto`: Tavily when `TAVILY_API_KEY` exists, otherwise no-key DuckDuckGo.
 - `tavily`: Tavily only; fails clearly if `TAVILY_API_KEY` is missing.
-- `duckduckgo`: no-key DuckDuckGo Instant Answer over HTTPS.
+- `duckduckgo`: no-key DuckDuckGo HTML results with Instant Answer fallback.
 
-Set it in the terminal app:
+DuckDuckGo is useful for local no-key testing, but it can return an anti-bot challenge to automated terminal traffic. When that happens, Polycode reports it clearly instead of giving the model an empty result. Use Tavily for reliable agent web search.
+
+Set it in the terminal app by typing `/settings`, pressing Enter, and changing the Web search row:
 
 ```text
-/settings web duckduckgo
-/settings web tavily
-/settings web auto
+/settings
 ```
 
 Or from the environment:

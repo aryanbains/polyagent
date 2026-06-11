@@ -49,9 +49,10 @@ describe('Dashboard', () => {
 	it('shows agents.yaml guidance when config exists without agents', () => {
 		const {lastFrame} = render(<Dashboard agents={[]} config={config} version="0.1.0" />);
 
-		expect(lastFrame()).toContain('No agents.yaml found');
-		expect(lastFrame()).toContain('Expected file');
+		expect(lastFrame()).toContain('No agents configured');
+		expect(lastFrame()).toContain('Expected:');
 		expect(lastFrame()).toContain('agents.yaml');
+		expect(lastFrame()).toContain('[+] New agent');
 		expect(lastFrame()).toContain('Needs attention');
 	});
 
@@ -65,8 +66,26 @@ describe('Dashboard', () => {
 
 		expect(lastFrame()).toContain('Polycode v0.1.0');
 		expect(lastFrame()).toContain('Agents');
-		expect(lastFrame()).toContain('researcher idle');
-		expect(lastFrame()).toContain('/help for commands');
+		expect(lastFrame()).toContain('[R] researcher');
+		expect(lastFrame()).toContain('idle | 1 tools');
+		expect(lastFrame()).toContain('/ actions');
+		expect(lastFrame()).toContain('mouse wheel scroll');
 		expect(lastFrame()).toContain('Ask researcher to');
+	});
+
+	it('opens searchable slash actions from the composer', async () => {
+		const {lastFrame} = render(<Dashboard agents={agents} config={config} initialInputValue="/" interactive={false} version="0.1.0" />);
+
+		expect(lastFrame()).toContain('Actions');
+		expect(lastFrame()).toContain('Switch to multi-agent');
+		expect(lastFrame()).toContain('Settings');
+	});
+
+	it('opens the in-terminal agent builder from the agents panel shortcut', async () => {
+		const {lastFrame} = render(<Dashboard agents={agents} config={config} initialModal="agent" interactive={false} version="0.1.0" />);
+
+		expect(lastFrame()).toContain('Create Agent');
+		expect(lastFrame()).toContain('Name:');
+		expect(lastFrame()).toContain('Ctrl+S save');
 	});
 });

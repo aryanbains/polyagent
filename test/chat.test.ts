@@ -1,6 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import type {AgentDefinition} from '../src/agents/schema.js';
 import {AiSdkLlmClient, LlmCallError, runAgentTurn, type LlmClient, type LlmStreamOptions} from '../src/chat/run.js';
+import {buildSystemPrompt} from '../src/chat/system-prompt.js';
 import type {PolycodeConfig} from '../src/domain.js';
 import {LocalVectorMemoryStore} from '../src/memory/local-store.js';
 import {HashEmbedder} from '../src/memory/embedder.js';
@@ -47,6 +48,16 @@ class RecordingLlmClient implements LlmClient {
 }
 
 describe('runAgentTurn', () => {
+	it('injects the current date and time-sensitive search guidance into agent prompts', () => {
+		const prompt = buildSystemPrompt({
+			...agent,
+			tools: ['web_search']
+		}, [], new Date('2026-06-11T00:00:00.000Z'));
+
+		expect(prompt).toContain('Current date: 2026-06-11.');
+		expect(prompt).toContain('Use the current date/year in search queries');
+	});
+
 	it('stores exchanges and injects relevant memory on later turns', async () => {
 		const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'polycode-chat-'));
 		const memoryStore = new LocalVectorMemoryStore(path.join(temporaryDirectory, '.polycode', 'memory.json'), new HashEmbedder());

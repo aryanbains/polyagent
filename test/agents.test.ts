@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import {loadAgents} from '../src/agents/load.js';
+import {upsertAgentDefinition} from '../src/agents/manage.js';
 
 let temporaryDirectory = '';
 
@@ -48,5 +49,24 @@ describe('loadAgents', () => {
 		].join('\n'));
 
 		await expect(loadAgents({workingDirectory: temporaryDirectory, requireFile: true})).rejects.toThrow('agents.0.role');
+	});
+
+	it('creates an agents.yaml file when an agent is added from the terminal UI', async () => {
+		const result = await upsertAgentDefinition({
+			workingDirectory: temporaryDirectory,
+			agent: {
+				name: 'builder',
+				role: 'Implementation agent',
+				goal: 'Make scoped code changes',
+				tools: ['read_file', 'write_file'],
+				memory_enabled: true
+			}
+		});
+		const loaded = await loadAgents({workingDirectory: temporaryDirectory, requireFile: true});
+
+		expect(result.filePath).toBe(path.join(temporaryDirectory, 'agents.yaml'));
+		expect(loaded.agents).toHaveLength(1);
+		expect(loaded.agents[0]?.name).toBe('builder');
+		expect(loaded.orchestrator?.strategy).toBe('plan_and_execute');
 	});
 });

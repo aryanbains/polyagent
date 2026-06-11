@@ -151,12 +151,15 @@ async function runInit(options: InitCommandOptions): Promise<void> {
 async function runDashboard(): Promise<void> {
 	const config = await loadConfig();
 	let agentsError: string | null = null;
-	const agents = config === null ? [] : await loadAgents({workingDirectory: config.project.workingDirectory}).then((result) => result.agents).catch((error: unknown) => {
+	const loadedAgents = config === null ? {agents: [], orchestrator: null} : await loadAgents({workingDirectory: config.project.workingDirectory}).then((result) => ({
+		agents: result.agents,
+		orchestrator: result.orchestrator
+	})).catch((error: unknown) => {
 		agentsError = error instanceof Error ? error.message : String(error);
-		return [];
+		return {agents: [], orchestrator: null};
 	});
 	const memoryStats = await getMemoryStats(config);
-	const instance = render(<Dashboard agents={agents} agentsError={agentsError} config={config} memoryStats={memoryStats} version={getVersion()} />);
+	const instance = render(<Dashboard agents={loadedAgents.agents} agentsError={agentsError} config={config} memoryStats={memoryStats} orchestrator={loadedAgents.orchestrator} version={getVersion()} />);
 	await instance.waitUntilExit();
 }
 

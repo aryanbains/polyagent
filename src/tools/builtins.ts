@@ -55,6 +55,17 @@ function stripHtml(value: string): string {
 		.trim();
 }
 
+function decodeHtmlEntities(value: string): string {
+	return value
+		.replace(/&amp;/g, '&')
+		.replace(/&quot;/g, '"')
+		.replace(/&#39;/g, '\'')
+		.replace(/&lt;/g, '<')
+		.replace(/&gt;/g, '>')
+		.replace(/&#x([0-9a-f]+);/gi, (_match, codePoint: string) => String.fromCodePoint(Number.parseInt(codePoint, 16)))
+		.replace(/&#(\d+);/g, (_match, codePoint: string) => String.fromCodePoint(Number.parseInt(codePoint, 10)));
+}
+
 function getFetch(context?: ToolContext): typeof fetch {
 	return context?.fetch ?? fetch;
 }
@@ -69,17 +80,155 @@ function resolveWebSearchProvider(context: ToolContext): WebSearchProvider {
 	return context.webSearchProvider ?? 'auto';
 }
 
+function isCurrentFactQuery(query: string): boolean {
+	return /\b(current|latest|today|right now|present|incumbent|as of|chief minister|prime minister|president|governor|mayor|ceo|price)\b/i.test(query)
+		&& !/\b(history|historical|former|previous|past|list of|timeline)\b/i.test(query);
+}
+
+function normalizeCurrentFactSearchQuery(query: string, now = new Date()): {query: string; rewritten: boolean} {
+	if (!isCurrentFactQuery(query)) {
+		return {query, rewritten: false};
+	}
+
+	const currentYear = String(now.getUTCFullYear());
+	const yearPattern = /\b(?:19|20)\d{2}\b/g;
+	const hasYear = /\b(?:19|20)\d{2}\b/.test(query);
+	const rewrittenQuery = query.replace(yearPattern, (year) => year === currentYear ? year : currentYear);
+
+	if (rewrittenQuery !== query) {
+		return {query: rewrittenQuery, rewritten: true};
+	}
+
+	if (!hasYear) {
+		return {query: `${query} ${currentYear}`, rewritten: true};
+	}
+
+	return {query, rewritten: false};
+}
+
 type DuckDuckGoTopic = {
 	Text?: string;
 	FirstURL?: string;
 	Topics?: DuckDuckGoTopic[];
 };
 
+type DuckDuckGoSearchResult = {
+	title: string;
+	url: string;
+	snippet: string;
+};
+
 function flattenDuckDuckGoTopics(topics: DuckDuckGoTopic[]): DuckDuckGoTopic[] {
 	return topics.flatMap((topic) => topic.Topics === undefined ? [topic] : flattenDuckDuckGoTopics(topic.Topics));
 }
 
-async function duckDuckGoSearch(query: string, maxResults: number, context: ToolContext): Promise<ToolResult> {
+function isDuckDuckGoChallenge(html: string, status: number): boolean {
+	return status === 202 || /anomaly\.js|challenge-form|duckduckgo\.com\/anomaly/i.test(html);
+}
+
+function normalizeDuckDuckGoUrl(rawUrl: string): string {
+	const decoded = decodeHtmlEntities(rawUrl);
+	const normalized = decoded.startsWith('//') ? `https:${decoded}` : decoded;
+
+	try {
+		const url = new URL(normalized);
+		const redirected = url.searchParams.get('uddg');
+		return redirected === null ? normalized : decodeURIComponent(redirected);
+	} catch {
+		return normalized;
+	}
+}
+
+function parseDuckDuckGoHtmlResults(html: string, maxResults: number): DuckDuckGoSearchResult[] {
+	const anchors = [...html.matchAll(/<a[^>]+class=["'][^"']*(?:result__a|result-link)[^"']*["'][^>]+href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi)];
+	const results: DuckDuckGoSearchResult[] = [];
+
+	for (const [index, anchor] of anchors.entries()) {
+		const nextAnchor = anchors[index + 1];
+		const blockStart = anchor.index ?? 0;
+		const blockEnd = nextAnchor?.index ?? html.length;
+		const block = html.slice(blockStart, blockEnd);
+		const snippetMatch = /<(?:a|div|td)[^>]+class=["'][^"']*(?:result__snippet|result-snippet)[^"']*["'][^>]*>([\s\S]*?)<\/(?:a|div|td)>/i.exec(block);
+		const title = decodeHtmlEntities(stripHtml(anchor[2] ?? ''));
+		const url = normalizeDuckDuckGoUrl(anchor[1] ?? '');
+		const snippet = decodeHtmlEntities(stripHtml(snippetMatch?.[1] ?? ''));
+
+		if (title.length > 0 && url.length > 0) {
+			results.push({title, url, snippet});
+		}
+
+		if (results.length >= maxResults) {
+			break;
+		}
+	}
+
+	return results;
+}
+
+async function duckDuckGoHtmlSearch(query: string, maxResults: number, context: ToolContext): Promise<{blocked: boolean; result: ToolResult | null}> {
+	const url = new URL('https://html.duckduckgo.com/html/');
+	url.searchParams.set('q', query);
+	url.searchParams.set('kl', 'us-en');
+	let response: Response;
+
+	try {
+		response = await getFetch(context)(url, {
+			headers: {
+				'Accept': 'text/html,application/xhtml+xml',
+				'User-Agent': 'Mozilla/5.0 Polycode/0.1'
+			}
+		});
+	} catch (error) {
+		return {
+			blocked: false,
+			result: {
+				ok: false,
+				message: `DuckDuckGo search failed: ${error instanceof Error ? error.message : String(error)}`
+			}
+		};
+	}
+
+	const html = await response.text();
+	const blocked = isDuckDuckGoChallenge(html, response.status);
+
+	if (!response.ok && !blocked) {
+		return {
+			blocked: false,
+			result: {
+				ok: false,
+				message: `DuckDuckGo search failed with HTTP ${response.status}`
+			}
+		};
+	}
+
+	if (blocked) {
+		return {blocked: true, result: null};
+	}
+
+	const results = parseDuckDuckGoHtmlResults(html, maxResults);
+
+	if (results.length === 0) {
+		return {blocked: false, result: null};
+	}
+
+	return {
+		blocked: false,
+		result: {
+			ok: true,
+			message: results.map((item, index) => [
+				`${index + 1}. ${item.title}`,
+				item.url,
+				item.snippet
+			].filter((line) => line.length > 0).join('\n')).join('\n\n'),
+			data: {
+				provider: 'duckduckgo-html',
+				results
+			}
+		}
+	};
+}
+
+async function duckDuckGoInstantAnswerSearch(query: string, maxResults: number, context: ToolContext): Promise<ToolResult> {
 	const url = new URL('https://api.duckduckgo.com/');
 	url.searchParams.set('q', query);
 	url.searchParams.set('format', 'json');
@@ -130,6 +279,29 @@ async function duckDuckGoSearch(query: string, maxResults: number, context: Tool
 	};
 }
 
+async function duckDuckGoSearch(query: string, maxResults: number, context: ToolContext): Promise<ToolResult> {
+	const htmlResult = await duckDuckGoHtmlSearch(query, maxResults, context);
+
+	if (htmlResult.result !== null) {
+		return htmlResult.result;
+	}
+
+	const instantAnswer = await duckDuckGoInstantAnswerSearch(query, maxResults, context);
+
+	if (instantAnswer.ok && instantAnswer.message !== 'No DuckDuckGo instant answers returned.') {
+		return instantAnswer;
+	}
+
+	if (htmlResult.blocked) {
+		return {
+			ok: false,
+			message: 'DuckDuckGo no-key search was blocked by an anti-bot challenge. Try again later, set TAVILY_API_KEY, or switch Settings > Web search to Tavily.'
+		};
+	}
+
+	return instantAnswer;
+}
+
 async function tavilySearch(query: string, maxResults: number): Promise<ToolResult> {
 	if (process.env.TAVILY_API_KEY === undefined || process.env.TAVILY_API_KEY.length === 0) {
 		return {
@@ -157,6 +329,23 @@ async function tavilySearch(query: string, maxResults: number): Promise<ToolResu
 	return {
 		ok: true,
 		message: [result.answer, results].filter(Boolean).join('\n\n')
+	};
+}
+
+function withSearchMetadata(result: ToolResult, originalQuery: string, effectiveQuery: string, rewritten: boolean): ToolResult {
+	const prefix = rewritten
+		? `Search query used: ${effectiveQuery} (updated from: ${originalQuery})`
+		: `Search query used: ${effectiveQuery}`;
+
+	return {
+		...result,
+		message: `${prefix}\n\n${result.message}`,
+		data: {
+			...(typeof result.data === 'object' && result.data !== null ? result.data : {}),
+			originalQuery,
+			query: effectiveQuery,
+			queryRewritten: rewritten
+		}
 	};
 }
 
@@ -319,19 +508,24 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 					return {ok: true, message: process.env.POLYCODE_MOCK_WEB_SEARCH};
 				}
 
+				const normalized = normalizeCurrentFactSearchQuery(input.query);
 				const provider = resolveWebSearchProvider(context);
+				let result: ToolResult;
 
 				if (provider === 'tavily') {
-					return tavilySearch(input.query, input.max_results);
+					result = await tavilySearch(normalized.query, input.max_results);
+					return withSearchMetadata(result, input.query, normalized.query, normalized.rewritten);
 				}
 
 				if (provider === 'duckduckgo') {
-					return duckDuckGoSearch(input.query, input.max_results, context);
+					result = await duckDuckGoSearch(normalized.query, input.max_results, context);
+					return withSearchMetadata(result, input.query, normalized.query, normalized.rewritten);
 				}
 
-				return process.env.TAVILY_API_KEY === undefined || process.env.TAVILY_API_KEY.length === 0
-					? duckDuckGoSearch(input.query, input.max_results, context)
-					: tavilySearch(input.query, input.max_results);
+				result = await (process.env.TAVILY_API_KEY === undefined || process.env.TAVILY_API_KEY.length === 0
+					? duckDuckGoSearch(normalized.query, input.max_results, context)
+					: tavilySearch(normalized.query, input.max_results));
+				return withSearchMetadata(result, input.query, normalized.query, normalized.rewritten);
 			}
 		},
 		{

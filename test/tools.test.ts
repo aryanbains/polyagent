@@ -154,6 +154,94 @@ describe('built-in tools', () => {
 		expect(result.message).toContain('First related topic');
 	});
 
+	it('uses DuckDuckGo HTML results before instant-answer fallback', async () => {
+		const result = await getTool('web_search').execute({query: 'chief minister tamil nadu', max_results: 2}, context('allow', {
+			webSearchProvider: 'duckduckgo',
+			fetch: async () => new Response(`
+				<html>
+					<body>
+						<div class="result">
+							<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fcm">Tamil Nadu Chief Minister</a>
+							<a class="result__snippet">Current office holder information from a search result.</a>
+						</div>
+					</body>
+				</html>
+			`, {status: 200})
+		}));
+
+		expect(result.ok).toBe(true);
+		expect(result.message).toContain('Tamil Nadu Chief Minister');
+		expect(result.message).toContain('https://example.com/cm');
+		expect(result.message).toContain('Current office holder information');
+	});
+
+	it('rewrites stale-year current office-holder searches to the current year', async () => {
+		let requestedUrl = '';
+		const currentYear = String(new Date().getUTCFullYear());
+		const result = await getTool('web_search').execute({query: 'current Chief Minister of Tamil Nadu 2025', max_results: 2}, context('allow', {
+			webSearchProvider: 'duckduckgo',
+			fetch: async (input) => {
+				requestedUrl = String(input);
+				return new Response(`
+					<html>
+						<body>
+							<div class="result">
+								<a class="result__a" href="//duckduckgo.com/l/?uddg=https%3A%2F%2Fexample.com%2Fvijay">C. Joseph Vijay ministry</a>
+								<a class="result__snippet">C. Joseph Vijay is the incumbent Chief Minister of Tamil Nadu.</a>
+							</div>
+						</body>
+					</html>
+				`, {status: 200});
+			}
+		}));
+
+		expect(new URL(requestedUrl).searchParams.get('q')).toBe(`current Chief Minister of Tamil Nadu ${currentYear}`);
+		expect(result.message).toContain(`updated from: current Chief Minister of Tamil Nadu 2025`);
+		expect(result.message).toContain('C. Joseph Vijay');
+	});
+
+	it('adds the current year to office-holder searches without a year', async () => {
+		let requestedUrl = '';
+		const currentYear = String(new Date().getUTCFullYear());
+
+		await getTool('web_search').execute({query: 'Chief Minister of Tamil Nadu', max_results: 2}, context('allow', {
+			webSearchProvider: 'duckduckgo',
+			fetch: async (input) => {
+				requestedUrl = String(input);
+				return new Response(`
+					<html>
+						<body>
+							<a class="result__a" href="https://example.com/cm">C. Joseph Vijay</a>
+							<a class="result__snippet">Current Chief Minister of Tamil Nadu.</a>
+						</body>
+					</html>
+				`, {status: 200});
+			}
+		}));
+
+		expect(new URL(requestedUrl).searchParams.get('q')).toBe(`Chief Minister of Tamil Nadu ${currentYear}`);
+	});
+
+	it('reports DuckDuckGo anti-bot challenges clearly', async () => {
+		const result = await getTool('web_search').execute({query: 'latest price', max_results: 2}, context('allow', {
+			webSearchProvider: 'duckduckgo',
+			fetch: async (input) => {
+				const url = String(input);
+
+				if (url.includes('html.duckduckgo.com')) {
+					return new Response('<form id="challenge-form" action="//duckduckgo.com/anomaly.js"></form>', {status: 202});
+				}
+
+				return new Response(JSON.stringify({
+					RelatedTopics: []
+				}), {status: 200});
+			}
+		}));
+
+		expect(result.ok).toBe(false);
+		expect(result.message).toContain('anti-bot challenge');
+	});
+
 	it('returns a readable failure when Tavily is selected without an API key', async () => {
 		delete process.env.TAVILY_API_KEY;
 
