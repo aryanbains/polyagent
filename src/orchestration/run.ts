@@ -9,15 +9,16 @@ import {
 	createExecutionSession,
 	type ExecutionEvent
 } from '../runtime/execution.js';
+import {RunCancelledError, isRunCancelled, mergeAbortSignals, throwIfAborted} from '../runtime/cancellation.js';
 import {multiAgentOrchestrator} from '../runtime/orchestration.js';
 import {requestApproval as requestToolApproval, resolveWorkspacePath, writeTextFile} from '../tools/safety.js';
-import type {ToolApprovalMode, ToolContext, WebSearchProvider} from '../tools/types.js';
+import type {ToolApprovalMode, ToolContext, ToolResult, WebSearchProvider} from '../tools/types.js';
 import {createAgentMessageBus, type AgentMessage} from './message-bus.js';
 import {createPlannerDescriptor, planMultiAgentTaskDynamically, type MultiAgentPlan, type MultiAgentPlanStep} from './planner.js';
 import {type AgentStepRecord, createSessionId, type RecordedSession, saveRecordedSession} from './session-recorder.js';
 import {applyModifications, runAgentDebate, type DebateMessage, type DebateOutcome} from './debate.js';
 
-export type AgentRuntimeStatus = 'idle' | 'running' | 'succeeded' | 'failed';
+export type AgentRuntimeStatus = 'idle' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 
 export type MultiAgentRunCallbacks = {
 	onPlan?: (plan: MultiAgentPlan) => Promise<MultiAgentPlan | void> | MultiAgentPlan | void;
@@ -45,6 +46,9 @@ export type MultiAgentRunOptions = {
 	toolContext?: Pick<ToolContext, 'onPreview' | 'requestApproval'>;
 	callbacks?: MultiAgentRunCallbacks;
 	saveSession?: boolean;
+	abortSignal?: AbortSignal;
+	stepTimeoutMs?: number;
+	maxStepRetries?: number;
 };
 
 export type MultiAgentRunResult = {
@@ -338,16 +342,17 @@ async function maybeWriteRequestedArtifacts(options: MultiAgentRunOptions, recor
 
 function createFinalOutput(records: AgentStepRecord[], artifacts: string[]): string {
 	const failed = records.filter((record) => record.status === 'failed');
+	const cancelled = records.filter((record) => record.status === 'cancelled');
 	const successful = records.filter((record) => record.status === 'succeeded');
 	const lastSuccessful = successful.at(-1);
 	const answer = artifacts.length > 0
 		? `Created ${artifacts.length} file${artifacts.length === 1 ? '' : 's'} in the workspace.`
 		: lastSuccessful === undefined
-			? 'The agent team did not produce a successful result.'
+			? cancelled.length > 0 ? 'The run was cancelled before the agent team produced a successful result.' : 'The agent team did not produce a successful result.'
 			: usefulStepText(lastSuccessful, 1200);
 
 	return [
-		failed.length > 0 ? `Completed with ${failed.length} failed step(s).` : 'Completed successfully.',
+		cancelled.length > 0 ? `Cancelled with ${cancelled.length} cancelled step(s).` : failed.length > 0 ? `Completed with ${failed.length} failed step(s).` : 'Completed successfully.',
 		'',
 		'Steps',
 		...records.map((record) => {
@@ -361,7 +366,79 @@ function createFinalOutput(records: AgentStepRecord[], artifacts: string[]): str
 	].filter((line) => line.length > 0).join('\n');
 }
 
+function stepTimeoutMs(options: MultiAgentRunOptions): number {
+	if (options.stepTimeoutMs !== undefined) {
+		return options.stepTimeoutMs;
+	}
+
+	const value = Number.parseInt(process.env.POLYCODE_AGENT_STEP_TIMEOUT_MS ?? '', 10);
+	return Number.isFinite(value) && value > 0 ? Math.min(value, 600_000) : 180_000;
+}
+
+function maxStepRetries(options: MultiAgentRunOptions): number {
+	if (options.maxStepRetries !== undefined) {
+		return Math.max(options.maxStepRetries, 0);
+	}
+
+	const value = Number.parseInt(process.env.POLYCODE_AGENT_STEP_RETRIES ?? '', 10);
+	return Number.isFinite(value) && value >= 0 ? Math.min(value, 3) : 1;
+}
+
+function createCancelledRecord(step: MultiAgentPlanStep, agentName: string, startedAt = new Date()): AgentStepRecord {
+	const completedAt = new Date();
+	return {
+		stepId: step.id,
+		agentName,
+		title: step.title,
+		status: 'cancelled',
+		output: '',
+		error: 'Run cancelled.',
+		startedAt: startedAt.toISOString(),
+		completedAt: completedAt.toISOString(),
+		durationMs: completedAt.getTime() - startedAt.getTime()
+	};
+}
+
+async function withStepTimeout<T>(promiseFactory: (signal: AbortSignal | undefined) => Promise<T>, parentSignal: AbortSignal | undefined, timeoutMs: number): Promise<T> {
+	const controller = new AbortController();
+	const signal = mergeAbortSignals(parentSignal, controller.signal);
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	let timedOut = false;
+	const operation = promiseFactory(signal);
+	operation.catch(() => {});
+
+	const timeout = timeoutMs > 0
+		? new Promise<never>((_, reject) => {
+			timer = setTimeout(() => {
+				timedOut = true;
+				const error = new Error(`Step timed out after ${timeoutMs}ms.`);
+				controller.abort(error);
+				reject(error);
+			}, timeoutMs);
+		})
+		: undefined;
+
+	try {
+		return await (timeout === undefined ? operation : Promise.race([operation, timeout]));
+	} catch (error) {
+		if (timedOut) {
+			throw new Error(`Step timed out after ${timeoutMs}ms.`);
+		}
+
+		throw error;
+	} finally {
+		if (timer !== undefined) {
+			clearTimeout(timer);
+		}
+
+		if (timedOut) {
+			controller.abort(new Error(`Step timed out after ${timeoutMs}ms.`));
+		}
+	}
+}
+
 export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<MultiAgentRunResult> {
+	throwIfAborted(options.abortSignal);
 	const startedAt = new Date();
 	const sessionId = createSessionId(startedAt);
 	const messageBus = createAgentMessageBus();
@@ -375,7 +452,8 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 		task: options.task,
 		agents: options.agents,
 		orchestrator: options.orchestrator,
-		llmClient
+		llmClient,
+		abortSignal: options.abortSignal
 	});
 	let debateOutcome: DebateOutcome | undefined;
 
@@ -393,6 +471,7 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 				config: options.config,
 				llmClient,
 				agents: options.agents,
+				abortSignal: options.abortSignal,
 				callbacks: {
 					onDebateMessage: callbacks?.onDebateMessage
 				}
@@ -400,6 +479,10 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 			callbacks?.onDebateEnd?.(debateOutcome);
 			plan = applyModifications(plan, debateOutcome.modifications, options.agents);
 		} catch (error) {
+			if (isRunCancelled(error)) {
+				throw error;
+			}
+
 			debateOutcome = {
 				approved: false,
 				modifications: [],
@@ -417,85 +500,160 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 	}
 
 	const queue = new PQueue({concurrency: options.orchestrator.max_parallel_agents});
+	const retryLimit = maxStepRetries(options);
+	const timeoutMs = stepTimeoutMs(options);
+	const knownAgentNames = new Set(options.agents.map((agent) => agent.name));
+	const availableAgentNames = options.agents.map((agent) => agent.name);
 
-	const executeStep = async (step: MultiAgentPlanStep): Promise<AgentStepRecord> => {
-		const agent = findAgent(options.agents, step.agentName);
-		const stepStartedAt = new Date();
-		callbacks?.onAgentStatus?.(agent.name, 'running');
-		callbacks?.onStepStart?.(step);
-		messageBus.publish({
-			from: 'orchestrator',
-			to: agent.name,
-			type: 'delegation',
-			payload: {
-				stepId: step.id,
-				title: step.title,
-				prompt: step.prompt,
-				dependsOn: step.dependsOn
-			}
-		});
-
-		for (const dependency of step.dependsOn) {
-			const dependencyRecord = stepRecords.get(dependency);
-
-			if (dependencyRecord !== undefined) {
-				messageBus.publish({
-					from: agent.name,
-					to: dependencyRecord.agentName,
-					type: 'request',
-					payload: {
-						stepId: step.id,
-						dependency,
-						request: `Provide the result needed for ${step.title}.`
-					}
-				});
-				messageBus.publish({
-					from: dependencyRecord.agentName,
-					to: agent.name,
-					type: 'response',
-					payload: {
-						stepId: dependency,
-						status: dependencyRecord.status,
-						output: dependencyRecord.error ?? dependencyRecord.output
-					}
-				});
-			}
+	const sendAgentMessage = async (input: {
+		from: string;
+		to: string;
+		message: string;
+		expectResponse: boolean;
+	}): Promise<ToolResult> => {
+		if (input.to !== 'orchestrator' && input.to !== 'broadcast' && !knownAgentNames.has(input.to)) {
+			return {
+				ok: false,
+				message: `Unknown agent "${input.to}". Available agents: ${availableAgentNames.join(', ')}.`
+			};
 		}
 
-		const dependencyContext = stepContext(step, stepRecords);
-		const prompt = [
-			`Overall task:\n${options.task}`,
-			`Your assigned subtask:\n${step.prompt}`,
-			dependencyContext.length > 0 ? `Prior agent context:\n${dependencyContext}` : undefined,
-			'Use tools for file creation, file edits, web search, URL fetches, and shell commands when needed.',
-			'Do not paste full source code, HTML, CSS, JavaScript, fetched page bodies, or large raw tool output into your response. If you create files, write them with tools and return a concise summary with paths.',
-			'Return a concise result that the orchestrator can use.'
-		].filter(Boolean).join('\n\n');
-		const executionSession = createExecutionSession({
-			planner: createPlannerDescriptor(options.orchestrator),
-			orchestrator: multiAgentOrchestrator,
-			onEvent: (event) => {
-				executionEvents.push(event);
-				callbacks?.onExecutionEvent?.(event);
+		messageBus.publish({
+			from: input.from,
+			to: input.to,
+			type: input.expectResponse ? 'request' : 'status',
+			payload: {
+				message: input.message
 			}
 		});
-		const conversation = agentOutputs.get(agent.name) ?? [];
-		agentOutputs.set(agent.name, conversation);
+
+		if (!input.expectResponse) {
+			return {
+				ok: true,
+				message: `Message delivered to ${input.to}.`
+			};
+		}
+
+		const completedRecords = [...stepRecords.values()];
+		const targetRecord = input.to === 'orchestrator'
+			? completedRecords.at(-1)
+			: completedRecords.filter((record) => record.agentName === input.to).at(-1);
+		const response = targetRecord === undefined
+			? `No completed result from ${input.to} is available yet. The request has been recorded in the session.`
+			: `${targetRecord.agentName}/${targetRecord.stepId} (${targetRecord.status}): ${usefulStepText(targetRecord, 1200)}`;
+		messageBus.publish({
+			from: input.to === 'broadcast' ? 'orchestrator' : input.to,
+			to: input.from,
+			type: 'response',
+			payload: {
+				message: response
+			}
+		});
+
+		return {
+			ok: true,
+			message: response
+		};
+	};
+
+	const executeStep = async (step: MultiAgentPlanStep): Promise<AgentStepRecord> => {
+		const originalAgent = findAgent(options.agents, step.agentName);
+		const stepStartedAt = new Date();
+		callbacks?.onStepStart?.(step);
+		const fallbackAgent = options.agents.find((agent) => agent.name !== originalAgent.name);
+		const candidateAgents = [originalAgent, ...(fallbackAgent === undefined ? [] : [fallbackAgent])];
 		let output = '';
 		let errorMessage: string | undefined;
+		let finalAgent = originalAgent;
+		let finalStatus: AgentStepRecord['status'] = 'failed';
 
-		try {
-			output = await runAgentTurn({
+		if (options.abortSignal?.aborted === true) {
+			const record = createCancelledRecord(step, originalAgent.name, stepStartedAt);
+			stepRecords.set(step.id, record);
+			callbacks?.onStepFinish?.(record);
+			callbacks?.onAgentStatus?.(originalAgent.name, 'cancelled');
+			return record;
+		}
+
+		const runAttempt = async (agent: AgentDefinition, attempt: number, signal: AbortSignal | undefined): Promise<string> => {
+			callbacks?.onAgentStatus?.(agent.name, 'running');
+			messageBus.publish({
+				from: 'orchestrator',
+				to: agent.name,
+				type: 'delegation',
+				payload: {
+					stepId: step.id,
+					title: step.title,
+					prompt: step.prompt,
+					dependsOn: step.dependsOn,
+					attempt
+				}
+			});
+
+			for (const dependency of step.dependsOn) {
+				const dependencyRecord = stepRecords.get(dependency);
+
+				if (dependencyRecord !== undefined) {
+					messageBus.publish({
+						from: agent.name,
+						to: dependencyRecord.agentName,
+						type: 'request',
+						payload: {
+							stepId: step.id,
+							dependency,
+							request: `Provide the result needed for ${step.title}.`
+						}
+					});
+					messageBus.publish({
+						from: dependencyRecord.agentName,
+						to: agent.name,
+						type: 'response',
+						payload: {
+							stepId: dependency,
+							status: dependencyRecord.status,
+							output: dependencyRecord.error ?? dependencyRecord.output
+						}
+					});
+				}
+			}
+
+			const dependencyContext = stepContext(step, stepRecords);
+			const prompt = [
+				`Overall task:\n${options.task}`,
+				`Your assigned subtask:\n${step.prompt}`,
+				attempt > 1 ? `Attempt ${attempt}: the previous attempt failed. Correct the issue and return a concise result.` : undefined,
+				dependencyContext.length > 0 ? `Prior agent context:\n${dependencyContext}` : undefined,
+				'Use tools for file creation, file edits, web search, URL fetches, shell commands, and agent-to-agent questions when needed.',
+				'Use message_agent when another agent has context you need or when you need to notify another agent of a useful result.',
+				'Do not paste full source code, HTML, CSS, JavaScript, fetched page bodies, or large raw tool output into your response. If you create files, write them with tools and return a concise summary with paths.',
+				'Return a concise result that the orchestrator can use.'
+			].filter(Boolean).join('\n\n');
+			const executionSession = createExecutionSession({
+				planner: createPlannerDescriptor(options.orchestrator),
+				orchestrator: multiAgentOrchestrator,
+				onEvent: (event) => {
+					executionEvents.push(event);
+					callbacks?.onExecutionEvent?.(event);
+				}
+			});
+			const conversation = agentOutputs.get(agent.name) ?? [];
+			agentOutputs.set(agent.name, conversation);
+
+			return runAgentTurn({
 				config: options.config,
 				agent,
 				message: prompt,
 				conversation,
 				llmClient,
 				session: executionSession,
+				abortSignal: signal,
 				toolContext: {
 					workingDirectory: options.config.project.workingDirectory,
 					approvalMode: options.approvalMode,
 					webSearchProvider: options.webSearchProvider,
+					agentName: agent.name,
+					availableAgents: availableAgentNames,
+					sendAgentMessage,
 					onPreview: options.toolContext?.onPreview,
 					requestApproval: options.toolContext?.requestApproval
 				},
@@ -503,16 +661,79 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 					callbacks?.onToken?.(agent.name, token);
 				}
 			});
-		} catch (error) {
-			errorMessage = error instanceof Error ? error.message : String(error);
+		};
+
+		for (const [candidateIndex, candidateAgent] of candidateAgents.entries()) {
+			finalAgent = candidateAgent;
+			const attemptsForCandidate = candidateIndex === 0 ? retryLimit + 1 : 1;
+
+			if (candidateIndex > 0) {
+				messageBus.publish({
+					from: 'orchestrator',
+					to: candidateAgent.name,
+					type: 'delegation',
+					payload: {
+						stepId: step.id,
+						title: step.title,
+						reassignedFrom: originalAgent.name,
+						reason: errorMessage ?? 'Previous agent failed.'
+					}
+				});
+			}
+
+			for (let attempt = 1; attempt <= attemptsForCandidate; attempt += 1) {
+				try {
+					output = await withStepTimeout((signal) => runAttempt(candidateAgent, attempt, signal), options.abortSignal, timeoutMs);
+					errorMessage = undefined;
+					finalStatus = 'succeeded';
+					break;
+				} catch (error) {
+					if (isRunCancelled(error)) {
+						errorMessage = 'Run cancelled.';
+						finalStatus = 'cancelled';
+						break;
+					}
+
+					errorMessage = error instanceof Error ? error.message : String(error);
+					finalStatus = 'failed';
+					messageBus.publish({
+						from: candidateAgent.name,
+						to: 'orchestrator',
+						type: 'error',
+						payload: {
+							stepId: step.id,
+							attempt,
+							error: errorMessage
+						}
+					});
+
+					if (attempt < attemptsForCandidate) {
+						messageBus.publish({
+							from: 'orchestrator',
+							to: candidateAgent.name,
+							type: 'status',
+							payload: {
+								stepId: step.id,
+								status: 'retrying',
+								nextAttempt: attempt + 1,
+								error: errorMessage
+							}
+						});
+					}
+				}
+			}
+
+			if (finalStatus === 'succeeded' || finalStatus === 'cancelled') {
+				break;
+			}
 		}
 
 		const completedAt = new Date();
 		const record: AgentStepRecord = {
 			stepId: step.id,
-			agentName: agent.name,
+			agentName: finalAgent.name,
 			title: step.title,
-			status: errorMessage === undefined ? 'succeeded' : 'failed',
+			status: finalStatus,
 			output,
 			error: errorMessage,
 			startedAt: stepStartedAt.toISOString(),
@@ -522,9 +743,9 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 
 		stepRecords.set(step.id, record);
 		messageBus.publish({
-			from: agent.name,
+			from: finalAgent.name,
 			to: 'orchestrator',
-			type: errorMessage === undefined ? 'result' : 'error',
+			type: finalStatus === 'succeeded' ? 'result' : finalStatus === 'cancelled' ? 'status' : 'error',
 			payload: {
 				stepId: step.id,
 				status: record.status,
@@ -532,7 +753,7 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 			}
 		});
 		callbacks?.onStepFinish?.(record);
-		callbacks?.onAgentStatus?.(agent.name, record.status === 'succeeded' ? 'succeeded' : 'failed');
+		callbacks?.onAgentStatus?.(finalAgent.name, record.status === 'cancelled' ? 'cancelled' : record.status === 'succeeded' ? 'succeeded' : 'failed');
 		return record;
 	};
 
@@ -557,11 +778,12 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 
 	const records = await Promise.all(plan.steps.map(async (step) => runWithDependencies(step)));
 	const failed = records.filter((record) => record.status === 'failed');
+	const cancelled = records.some((record) => record.status === 'cancelled') || options.abortSignal?.aborted === true;
 	const artifactSeedOutput = [
-		failed.length > 0 ? `Completed with ${failed.length} failed step(s).` : 'Completed successfully.',
+		cancelled ? 'Run cancelled.' : failed.length > 0 ? `Completed with ${failed.length} failed step(s).` : 'Completed successfully.',
 		...records.map((record) => `${record.agentName}/${record.stepId}: ${usefulStepText(record, 1800)}`)
 	].join('\n\n');
-	const artifacts = await maybeWriteRequestedArtifacts(options, records, artifactSeedOutput);
+	const artifacts = cancelled ? [] : await maybeWriteRequestedArtifacts(options, records, artifactSeedOutput);
 	const finalOutput = createFinalOutput(records, artifacts);
 	const completedAt = new Date();
 	const session: RecordedSession = {
@@ -578,7 +800,8 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 		steps: records,
 		finalOutput,
 		artifacts,
-		success: failed.length === 0,
+		success: failed.length === 0 && !cancelled,
+		cancelled,
 		stats: {
 			agentsUsed: new Set(records.map((record) => record.agentName)).size,
 			toolsCalled: executionEvents.filter((event) => event.type === 'tool_started').length,
@@ -593,6 +816,6 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 		sessionPath,
 		finalOutput: session.finalOutput,
 		artifacts,
-		success: failed.length === 0
+		success: session.success
 	};
 }

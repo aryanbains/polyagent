@@ -15,6 +15,7 @@ function renderGraph(options: {
 	onApprove?: (plan: MultiAgentPlan) => void;
 	onEdit?: (stepId: string, prompt: string) => void;
 	onReplan?: (reason: string) => void;
+	agentNames?: string[];
 } = {}) {
 	let eventId = 0;
 	let testInput: TestInput | undefined;
@@ -23,6 +24,7 @@ function renderGraph(options: {
 		onApprove: options.onApprove ?? (() => {}),
 		onEdit: options.onEdit ?? (() => {}),
 		onReplan: options.onReplan ?? (() => {}),
+		agentNames: options.agentNames,
 		interactive: false
 	};
 	const instance = render(<TaskGraph {...props} testInput={testInput} />);
@@ -136,5 +138,47 @@ describe('TaskGraph', () => {
 
 		const approved = onApprove.mock.calls[0]?.[0] as MultiAgentPlan;
 		expect(approved.steps.find((step) => step.id === 'research')?.prompt).toBe('Original research prompt with sources');
+	});
+
+	it('strips terminal mouse sequences from edited prompts', async () => {
+		const onEdit = vi.fn();
+		const {send} = renderGraph({onEdit});
+
+		await send('e');
+		await send('', {return: true});
+		await send('\u001B[<0;61;15M clean');
+		await send('[<65;69;20M');
+		await send('', {return: true});
+
+		expect(onEdit).toHaveBeenCalledWith('research', 'Original research prompt clean');
+	});
+
+	it('can reassign a step before approval', async () => {
+		const onApprove = vi.fn();
+		const {send} = renderGraph({onApprove, agentNames: ['researcher', 'analyst', 'writer']});
+
+		await send('e');
+		await send('a');
+		await send('', {escape: true});
+		await send('y');
+
+		const approved = onApprove.mock.calls[0]?.[0] as MultiAgentPlan;
+		expect(approved.steps[0]?.agentName).toBe('analyst');
+	});
+
+	it('can add and delete steps before approval', async () => {
+		const onApprove = vi.fn();
+		const {send} = renderGraph({onApprove});
+
+		await send('e');
+		await send('+');
+		await send('', {downArrow: true});
+		await send('x');
+		await send('', {escape: true});
+		await send('y');
+
+		const approved = onApprove.mock.calls[0]?.[0] as MultiAgentPlan;
+		expect(approved.steps.map((step) => step.id)).toEqual(['research', 'step_3']);
+		expect(approved.steps[1]?.dependsOn).toEqual(['research']);
 	});
 });

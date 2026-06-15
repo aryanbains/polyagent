@@ -26,6 +26,10 @@ export function resolveToolNames(agent: AgentDefinition): string[] {
 
 export function createToolSet(agent: AgentDefinition, context: ToolContext): ToolSet {
 	const activeTools = new Set(resolveToolNames(agent));
+	if (context.sendAgentMessage !== undefined) {
+		activeTools.add('message_agent');
+	}
+
 	const entries = getToolDefinitions()
 		.filter((definition) => activeTools.has(definition.name))
 		.map((definition) => [
@@ -33,7 +37,10 @@ export function createToolSet(agent: AgentDefinition, context: ToolContext): Too
 			tool({
 				description: definition.description,
 				inputSchema: definition.inputSchema,
-				execute: async (input): Promise<ToolResult> => definition.execute(input, context)
+				execute: async (input, options): Promise<ToolResult> => definition.execute(input, {
+					...context,
+					abortSignal: options?.abortSignal ?? context.abortSignal
+				})
 			})
 		]);
 

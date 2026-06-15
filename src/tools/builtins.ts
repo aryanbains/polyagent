@@ -4,6 +4,7 @@ import {execaCommand} from 'execa';
 import fg from 'fast-glob';
 import {tavily} from '@tavily/core';
 import {z} from 'zod';
+import {mergeAbortSignals, throwIfAborted} from '../runtime/cancellation.js';
 import {createUnifiedDiff, limitOutput, readTextFileIfExists, requestApproval, resolveWorkspacePath, writeTextFile} from './safety.js';
 import type {ToolContext, ToolDefinition, ToolResult, WebSearchProvider} from './types.js';
 
@@ -100,10 +101,11 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
 
 async function fetchWithTimeout(context: ToolContext, input: URL, init: RequestInit = {}): Promise<Response> {
 	const controller = new AbortController();
+	const signal = mergeAbortSignals(context.abortSignal, controller.signal);
 	return withTimeout(
 		getFetch(context)(input, {
 			...init,
-			signal: controller.signal
+			signal
 		}),
 		webTimeoutMs(),
 		'Web request',
@@ -405,6 +407,7 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 				path: z.string().describe('Workspace-relative file path')
 			}),
 			async execute(input, context) {
+				throwIfAborted(context.abortSignal);
 				const filePath = resolveWorkspacePath(context.workingDirectory, input.path);
 				let buffer: Buffer;
 
@@ -439,6 +442,7 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 				content: z.string().describe('Full new file contents')
 			}),
 			async execute(input, context) {
+				throwIfAborted(context.abortSignal);
 				const filePath = resolveWorkspacePath(context.workingDirectory, input.path);
 				const before = await readTextFileIfExists(filePath);
 				const diff = createUnifiedDiff(input.path, before, input.content);
@@ -448,6 +452,7 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 					return {ok: false, message: `write_file declined for ${input.path}`};
 				}
 
+				throwIfAborted(context.abortSignal);
 				await writeTextFile(filePath, input.content);
 				return {ok: true, message: `Wrote ${input.path}`};
 			}
@@ -460,6 +465,7 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 				content: z.string().describe('Text to append')
 			}),
 			async execute(input, context) {
+				throwIfAborted(context.abortSignal);
 				const filePath = resolveWorkspacePath(context.workingDirectory, input.path);
 				const before = await readTextFileIfExists(filePath);
 				const after = `${before}${before.length > 0 && !before.endsWith('\n') ? '\n' : ''}${input.content}`;
@@ -470,6 +476,7 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 					return {ok: false, message: `append_to_file declined for ${input.path}`};
 				}
 
+				throwIfAborted(context.abortSignal);
 				await writeTextFile(filePath, after);
 				return {ok: true, message: `Appended to ${input.path}`};
 			}
@@ -482,6 +489,7 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 				recursive: z.boolean().default(false).describe('Whether to list recursively')
 			}),
 			async execute(input, context) {
+				throwIfAborted(context.abortSignal);
 				const directory = resolveWorkspacePath(context.workingDirectory, input.path);
 				return {
 					ok: true,
@@ -497,6 +505,7 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 				directory: z.string().default('.').describe('Workspace-relative directory to search in')
 			}),
 			async execute(input, context) {
+				throwIfAborted(context.abortSignal);
 				const directory = resolveWorkspacePath(context.workingDirectory, input.directory);
 				const matches = await fg(input.pattern, {
 					cwd: directory,
@@ -519,6 +528,7 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 				timeout_ms: z.number().int().positive().max(120_000).default(10_000)
 			}),
 			async execute(input, context) {
+				throwIfAborted(context.abortSignal);
 				const cwd = resolveWorkspacePath(context.workingDirectory, input.working_dir);
 				const approved = await requestApproval(`Execute command in ${input.working_dir}: ${input.command}?`, context, input.command);
 
@@ -526,21 +536,60 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 					return {ok: false, message: `execute_command declined: ${input.command}`};
 				}
 
-				const result = await execaCommand(input.command, {
-					cwd,
-					timeout: input.timeout_ms,
-					reject: false,
-					all: true
-				});
+				throwIfAborted(context.abortSignal);
+				let result: Awaited<ReturnType<typeof execaCommand>>;
+
+				try {
+					result = await execaCommand(input.command, {
+						cwd,
+						timeout: input.timeout_ms,
+						cancelSignal: context.abortSignal,
+						reject: false,
+						all: true
+					});
+				} catch (error) {
+					if (context.abortSignal?.aborted === true) {
+						return {ok: false, message: 'Command cancelled.'};
+					}
+
+					return {ok: false, message: `Command failed: ${error instanceof Error ? error.message : String(error)}`};
+				}
 
 				if (result.timedOut) {
 					return {ok: false, message: `Command timed out after ${input.timeout_ms}ms.`};
 				}
 
+				if (result.isCanceled) {
+					return {ok: false, message: 'Command cancelled.'};
+				}
+
 				return {
 					ok: result.exitCode === 0,
-					message: limitOutput(result.all ?? result.stdout ?? result.stderr ?? '')
+					message: limitOutput(String(result.all ?? result.stdout ?? result.stderr ?? ''))
 				};
+			}
+		},
+		{
+			name: 'message_agent',
+			description: 'Send a concise message or request to another configured agent during a multi-agent run.',
+			inputSchema: z.object({
+				to: z.string().describe('Target agent name, or orchestrator'),
+				message: z.string().describe('Concise message or question for the target agent'),
+				expect_response: z.boolean().default(false).describe('Whether this message asks for a response from the target')
+			}),
+			async execute(input, context) {
+				throwIfAborted(context.abortSignal);
+
+				if (context.sendAgentMessage === undefined || context.agentName === undefined) {
+					return {ok: false, message: 'Agent messaging is only available during multi-agent runs.'};
+				}
+
+				return context.sendAgentMessage({
+					from: context.agentName,
+					to: input.to,
+					message: input.message,
+					expectResponse: input.expect_response
+				});
 			}
 		},
 		{
@@ -551,6 +600,7 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 				max_results: z.number().int().positive().max(10).default(5)
 			}),
 			async execute(input, context) {
+				throwIfAborted(context.abortSignal);
 				if (process.env.POLYCODE_MOCK_WEB_SEARCH !== undefined) {
 					return {ok: true, message: process.env.POLYCODE_MOCK_WEB_SEARCH};
 				}
@@ -582,6 +632,7 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 				url: z.string().url().describe('URL to fetch')
 			}),
 			async execute(input, context) {
+				throwIfAborted(context.abortSignal);
 				let url: URL;
 
 				try {

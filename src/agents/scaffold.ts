@@ -24,6 +24,7 @@ agents:
       - execute_command
       - web_search
       - fetch_url
+      - message_agent
   - name: analyst
     role: "Analysis specialist that compares findings, extracts tradeoffs, and identifies risks"
     goal: "Turn raw research and project context into structured recommendations"
@@ -32,6 +33,7 @@ agents:
       - read_file
       - list_directory
       - search_files
+      - message_agent
   - name: writer
     role: "Technical writer that creates clear markdown reports and implementation summaries"
     goal: "Synthesize agent results into concise, useful documents"
@@ -40,6 +42,7 @@ agents:
       - read_file
       - write_file
       - append_to_file
+      - message_agent
 `;
 
 async function fileExists(filePath: string): Promise<boolean> {

@@ -5,6 +5,7 @@ import type {PolycodeConfig} from '../domain.js';
 import {createLanguageModel} from '../llm/providers.js';
 import {createMemoryStore} from '../memory/factory.js';
 import type {MemoryStore} from '../memory/types.js';
+import {RunCancelledError, isAbortLikeError, throwIfAborted} from '../runtime/cancellation.js';
 import type {ToolContext} from '../tools/types.js';
 import {createToolSet} from '../tools/registry.js';
 import {
@@ -24,6 +25,7 @@ export type LlmStreamOptions = {
 	messages: ModelMessage[];
 	system: string;
 	tools?: ToolSet;
+	abortSignal?: AbortSignal;
 	onToolStart?: (toolName: string, input: unknown, toolCallId?: string) => void;
 	onToolFinish?: (toolName: string, output: unknown, success: boolean, toolCallId?: string) => void;
 };
@@ -39,7 +41,11 @@ export class LlmCallError extends Error {
 	}
 }
 
-function toLlmCallError(error: unknown): LlmCallError {
+function toLlmCallError(error: unknown): Error {
+	if (error instanceof RunCancelledError || isAbortLikeError(error)) {
+		return new RunCancelledError();
+	}
+
 	if (error instanceof LlmCallError) {
 		return error;
 	}
@@ -67,6 +73,8 @@ function toLlmCallError(error: unknown): LlmCallError {
 
 export class AiSdkLlmClient implements LlmClient {
 	async *streamText(options: LlmStreamOptions): AsyncIterable<string> {
+		throwIfAborted(options.abortSignal);
+
 		if (process.env.POLYCODE_MOCK_LLM_RESPONSE !== undefined) {
 			yield process.env.POLYCODE_MOCK_LLM_RESPONSE;
 			return;
@@ -78,6 +86,7 @@ export class AiSdkLlmClient implements LlmClient {
 				system: options.system,
 				messages: options.messages,
 				tools: options.tools,
+				abortSignal: options.abortSignal,
 				stopWhen: stepCountIs(6),
 				experimental_onToolCallStart: (event) => {
 					options.onToolStart?.(event.toolCall.toolName, event.toolCall.input, event.toolCall.toolCallId);
@@ -88,6 +97,7 @@ export class AiSdkLlmClient implements LlmClient {
 			});
 
 			for await (const chunk of result.textStream) {
+				throwIfAborted(options.abortSignal);
 				yield chunk;
 			}
 		} catch (error) {
@@ -105,12 +115,14 @@ export type RunAgentTurnOptions = {
 	llmClient?: LlmClient;
 	session?: ExecutionSession;
 	toolContext?: ToolContext;
+	abortSignal?: AbortSignal;
 	onToken?: (token: string) => void;
 	onToolStart?: (toolName: string, input: unknown) => void;
 	onToolFinish?: (toolName: string, output: unknown, success: boolean) => void;
 };
 
 export async function runAgentTurn(options: RunAgentTurnOptions): Promise<string> {
+	throwIfAborted(options.abortSignal);
 	const session = options.session ?? createExecutionSession();
 	const runId = randomUUID();
 	const runStepId = session.nextStepId();
@@ -119,13 +131,17 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<string
 	const memoryStore = options.memoryStore ?? createMemoryStore(options.config);
 	const llmClient = options.llmClient ?? new AiSdkLlmClient();
 	const memories = options.agent.memory_enabled ? await memoryStore.search(options.agent.name, options.message, 5) : [];
+	throwIfAborted(options.abortSignal);
 	const system = buildSystemPrompt(options.agent, memories);
 	const conversation = options.conversation ?? [];
 	const messages: ModelMessage[] = [
 		...conversation,
 		{role: 'user', content: options.message}
 	];
-	const tools = options.toolContext === undefined ? undefined : createToolSet(options.agent, options.toolContext);
+	const tools = options.toolContext === undefined ? undefined : createToolSet(options.agent, {
+		...options.toolContext,
+		abortSignal: options.abortSignal ?? options.toolContext.abortSignal
+	});
 	let response = '';
 	const runningTools = new Map<string, RunningToolExecution>();
 
@@ -153,9 +169,11 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<string
 			messages,
 			system,
 			tools,
+			abortSignal: options.abortSignal,
 			onToolStart: startTool,
 			onToolFinish: finishTool
 		})) {
+			throwIfAborted(options.abortSignal);
 			response += token;
 			options.onToken?.(token);
 		}
@@ -179,6 +197,7 @@ export async function runAgentTurn(options: RunAgentTurnOptions): Promise<string
 	);
 
 	if (options.agent.memory_enabled) {
+		throwIfAborted(options.abortSignal);
 		await memoryStore.add(options.agent.name, `User: ${options.message}\nAssistant: ${response}`);
 	}
 

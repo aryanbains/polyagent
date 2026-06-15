@@ -3,6 +3,7 @@ import {z} from 'zod';
 import type {AgentDefinition, OrchestratorConfig} from '../agents/schema.js';
 import type {PolycodeConfig} from '../domain.js';
 import type {LlmClient} from '../chat/run.js';
+import {isRunCancelled, throwIfAborted} from '../runtime/cancellation.js';
 import type {PlannerDescriptor} from '../runtime/orchestration.js';
 
 export type MultiAgentPlanStepStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped';
@@ -43,6 +44,7 @@ export type DynamicPlanOptions = {
 	agents: AgentDefinition[];
 	orchestrator: OrchestratorConfig;
 	llmClient?: LlmClient;
+	abortSignal?: AbortSignal;
 };
 
 export function createPlannerDescriptor(orchestrator: OrchestratorConfig): PlannerDescriptor {
@@ -211,6 +213,8 @@ export function planMultiAgentTask(task: string, agents: AgentDefinition[], orch
 }
 
 export async function planMultiAgentTaskDynamically(options: DynamicPlanOptions): Promise<MultiAgentPlan> {
+	throwIfAborted(options.abortSignal);
+
 	if (options.agents.length === 0) {
 		throw new Error('No agents are configured. Create agents.yaml and run polycode validate.');
 	}
@@ -244,8 +248,10 @@ export async function planMultiAgentTaskDynamically(options: DynamicPlanOptions)
 			config: options.config,
 			agent: orchestratorAgent,
 			messages,
-			system: 'You are Polycode dynamic planner. Produce valid JSON only. Do not write markdown or commentary.'
+			system: 'You are Polycode dynamic planner. Produce valid JSON only. Do not write markdown or commentary.',
+			abortSignal: options.abortSignal
 		})) {
+			throwIfAborted(options.abortSignal);
 			response += token;
 		}
 
@@ -260,7 +266,11 @@ export async function planMultiAgentTaskDynamically(options: DynamicPlanOptions)
 			createdAt: new Date().toISOString(),
 			source: 'dynamic'
 		};
-	} catch {
+	} catch (error) {
+		if (isRunCancelled(error)) {
+			throw error;
+		}
+
 		return planMultiAgentTask(options.task, options.agents, options.orchestrator);
 	}
 }

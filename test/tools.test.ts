@@ -145,6 +145,30 @@ describe('built-in tools', () => {
 		}
 	});
 
+	it('sends agent-to-agent messages through the tool context', async () => {
+		const sentMessages: Array<{from: string; to: string; message: string; expectResponse: boolean}> = [];
+		const result = await getTool('message_agent').execute({
+			to: 'writer',
+			message: 'Please use these findings in the report.',
+			expect_response: true
+		}, context('allow', {
+			agentName: 'researcher',
+			sendAgentMessage: (input) => {
+				sentMessages.push(input);
+				return {ok: true, message: 'writer acknowledged'};
+			}
+		}));
+
+		expect(result.ok).toBe(true);
+		expect(result.message).toContain('acknowledged');
+		expect(sentMessages).toEqual([{
+			from: 'researcher',
+			to: 'writer',
+			message: 'Please use these findings in the report.',
+			expectResponse: true
+		}]);
+	});
+
 	it('uses DuckDuckGo no-key search with injected fetch', async () => {
 		const result = await getTool('web_search').execute({query: 'polycode', max_results: 2}, context('allow', {
 			webSearchProvider: 'duckduckgo',

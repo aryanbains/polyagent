@@ -150,6 +150,54 @@ describe('runAgentTurn', () => {
 		expect(events).toEqual(['start:read_file', 'finish:read_file']);
 	});
 
+	it('passes abort signals to the LLM client', async () => {
+		const controller = new AbortController();
+		let receivedSignal: AbortSignal | undefined;
+		const llmClient: LlmClient = {
+			async *streamText(options: LlmStreamOptions): AsyncIterable<string> {
+				receivedSignal = options.abortSignal;
+				yield 'done';
+			}
+		};
+
+		await runAgentTurn({
+			config,
+			agent: {
+				...agent,
+				memory_enabled: false
+			},
+			message: 'hello',
+			llmClient,
+			abortSignal: controller.signal
+		});
+
+		expect(receivedSignal).toBe(controller.signal);
+	});
+
+	it('stops before calling the LLM when already cancelled', async () => {
+		const controller = new AbortController();
+		let called = false;
+		const llmClient: LlmClient = {
+			async *streamText(): AsyncIterable<string> {
+				called = true;
+				yield 'should not happen';
+			}
+		};
+		controller.abort(new Error('Run cancelled by test.'));
+
+		await expect(runAgentTurn({
+			config,
+			agent: {
+				...agent,
+				memory_enabled: false
+			},
+			message: 'hello',
+			llmClient,
+			abortSignal: controller.signal
+		})).rejects.toThrow('Run cancelled by test');
+		expect(called).toBe(false);
+	});
+
 	it('records structured execution events for runs and tool calls', async () => {
 		const session = createExecutionSession();
 		const llmClient: LlmClient = {

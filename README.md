@@ -2,7 +2,7 @@
 
 Polycode is a JavaScript-native multi-agent orchestration framework with a rich terminal GUI. The goal is to bring the multi-agent workflow ideas common in Python agent frameworks into the Node.js and TypeScript ecosystem, with an installable CLI that feels native to developer terminals.
 
-This repository is currently in **Phase 4** of active development. Phase 1 established the installable CLI and terminal shell. Phase 2 added agent definitions, validation, model-provider wiring, chat, and persistent memory. Phase 3 added the first tool system for files, commands, and web access. Phase 3.5 hardened the runtime with structured execution events, explicit execution sessions, stronger tool failure handling, web-search settings, and golden-path regressions. Phase 4 adds the first multi-agent orchestration layer: planning, dependency-aware scheduling, agent-to-agent messages, session recording, and replay.
+Polycode is ready for local npm installation and beta CLI use. The current release includes the terminal app, agent definitions, model-provider wiring, memory, file/web/shell tools, dependency-aware multi-agent orchestration, graph approval/editing, agent-to-agent messages, cancellation, session recording, and replay.
 
 ## What Works Today
 
@@ -19,8 +19,11 @@ This repository is currently in **Phase 4** of active development. Phase 1 estab
 - `polycode --version` prints the installed package version.
 - API keys are not echoed in CLI output and are encrypted before being written to disk.
 - Every agent run emits structured execution events for run/tool start and finish, including agent name, step id, status, timestamps, duration, input, output summary, and optional token counts.
+- Multi-agent runs support queued approvals, cancellation, retries, fallback reassignment, and sanitized session recordings.
 
 ## Install Locally
+
+The npm package name is `polycode-cli` because the unscoped `polycode` package name is already occupied on npm. The installed command remains `polycode`.
 
 ```bash
 npm install
@@ -64,8 +67,8 @@ Press `/` in the prompt to open searchable actions. The list filters as you type
 - Mouse click `+ New agent`: create an agent inside the terminal UI
 - Mouse wheel over the conversation panel: scroll the transcript
 - `PageUp` / `PageDown`: keyboard-scroll the session transcript
-- `Esc`: close popups
-- `Ctrl+C`: quit
+- `Esc`: close popups or cancel a running task
+- `Ctrl+C`: cancel a running task, then quit when idle
 
 The Settings popup controls run mode, web search provider, approvals, planner strategy, and memory visibility without leaving the app. The `+ New agent` control writes or updates `agents.yaml` for you. Single-letter shortcuts are intentionally avoided so normal prompts like `search this repo` type normally.
 
@@ -81,16 +84,17 @@ agents:
     role: Project-aware coding assistant that can inspect files and answer questions
     goal: Help the user understand and change this project accurately
     memory_enabled: true
-    tools: [read_file, list_directory, search_files, web_search, fetch_url]
+    tools: [read_file, list_directory, search_files, web_search, fetch_url, message_agent]
   - name: analyst
     role: Analysis specialist that compares findings and identifies risks
     goal: Turn raw research into structured recommendations
     memory_enabled: true
+    tools: [read_file, list_directory, search_files, message_agent]
   - name: writer
     role: Content writer that produces clear, structured documents
     goal: Transform research into readable content
     memory_enabled: true
-    tools: [read_file, write_file, append_to_file]
+    tools: [read_file, write_file, append_to_file, message_agent]
 ```
 
 Slash actions available in the app include switching run mode, creating agents, opening settings, validating agents, toggling memory, clearing the session, and exiting.
@@ -210,7 +214,7 @@ agents:
     goal: Find accurate information
     model: deepseek/deepseek-v4-pro
     memory_enabled: true
-    tools: [read_file, list_directory, search_files, web_search, fetch_url]
+    tools: [read_file, list_directory, search_files, web_search, fetch_url, message_agent]
 ```
 
 ## Tools
@@ -225,8 +229,11 @@ Agents can call tools listed in their `tools` array. Built-in tools:
 - `execute_command(command, working_dir?, timeout_ms?)`
 - `web_search(query, max_results?)`
 - `fetch_url(url)`
+- `message_agent(to, message, expect_response?)`
 
-File and command tools are workspace-scoped. `write_file`, `append_to_file`, and `execute_command` show a preview and require confirmation unless you pass `--yes`, set `/approve on` in the terminal app, or set `POLYCODE_TOOL_APPROVAL=allow`.
+File and command tools are workspace-scoped. `write_file`, `append_to_file`, and `execute_command` show a preview and require confirmation unless you pass `--yes`, change Approvals in `/settings`, or set `POLYCODE_TOOL_APPROVAL=allow`.
+
+`message_agent` is automatically available during multi-agent runs so agents can request context, notify each other, and store the exchange in the recorded session.
 
 `web_search` supports:
 
@@ -286,7 +293,9 @@ orchestrator:
 
 The dynamic planner receives the task plus available agent names, roles, and goals. It must return JSON plan steps with `id`, `title`, `agentName`, `prompt`, and `dependsOn`. Polycode sanitizes the result, removes invalid dependencies, rejects cycles, and uses the static research/analysis/synthesis plan as a fallback if the LLM output is not valid JSON.
 
-The Phase 4 message bus validates every inter-agent message with zod. Messages are stored in the session history:
+Before execution, the terminal app shows a task graph. You can approve it, ask for a replan, edit prompts, cycle a step's assigned agent, edit dependencies, add a step, or delete a step without leaving the UI.
+
+The message bus validates every inter-agent message with zod. Messages are stored in the session history:
 
 ```ts
 {
@@ -298,9 +307,9 @@ The Phase 4 message bus validates every inter-agent message with zod. Messages a
 }
 ```
 
-The scheduler uses `p-queue` to honor `max_parallel_agents`. Independent steps run concurrently when possible; dependent steps wait for prior results. If a step fails, the orchestrator records the failure, sends an error message, and continues with the remaining graph where possible.
+The scheduler uses `p-queue` to honor `max_parallel_agents`. Independent steps run concurrently when possible; dependent steps wait for prior results. If a step fails, the orchestrator records the failure, retries once by default, can reassign to another configured agent, sends an error/status message, and continues with the remaining graph where possible.
 
-Session recordings include plan, messages, execution events, step outputs, final output, stats, and duration.
+Session recordings include plan, messages, execution events, step outputs, final output, stats, and duration. Recordings are sanitized before writing so common API keys and oversized text blobs are redacted or truncated.
 
 ## Runtime Events
 
@@ -327,12 +336,12 @@ npm run check
 
 `npm run check` is the main verification command. It runs TypeScript checks, unit tests, a production build, and CLI e2e tests.
 
-Phase 3.5 golden-path regressions live in `test/phase35.test.ts` and cover repo inspection, file summarization, guarded file modification, command execution, and web docs fetching. Phase 4 orchestration tests live in `test/orchestration.test.ts` and cover message passing, dynamic planning, dynamic fallback, graceful fallback, sequential vs parallel scheduling, report creation, and session replay loading. `test/multi-agent-view.test.tsx` includes a dense rerender stress test for the three-agent terminal layout.
+Phase 3.5 golden-path regressions live in `test/phase35.test.ts` and cover repo inspection, file summarization, guarded file modification, command execution, and web docs fetching. Orchestration tests live in `test/orchestration.test.ts` and cover message passing, dynamic planning, dynamic fallback, retries, reassignment, cancellation, sequential vs parallel scheduling, report creation, and session replay loading. `test/multi-agent-view.test.tsx` includes a dense rerender stress test for the three-agent terminal layout.
 
 ## Roadmap
 
-Phase 5 is plugin support, docs polish, and publish readiness.
+Planned next work includes plugin support, richer memory backends, and deeper live-terminal stress testing across more terminals.
 
 ## Status
 
-Polycode is not published to npm yet. Treat this as an early local-development preview, not a production agent runner.
+Polycode is prepared for npm publishing as `polycode-cli` after you log in to npm and run `npm publish`. For best public demos, use Tavily for web search; DuckDuckGo remains a no-key best-effort fallback.

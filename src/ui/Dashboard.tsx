@@ -13,6 +13,7 @@ import {AiSdkLlmClient, runAgentTurn, type LlmClient} from '../chat/run.js';
 import {runMultiAgentTask, type AgentRuntimeStatus, type MultiAgentRunResult} from '../orchestration/run.js';
 import {planMultiAgentTaskDynamically, type MultiAgentPlan} from '../orchestration/planner.js';
 import {applyModifications, runAgentDebate, type DebateMessage, type DebateOutcome} from '../orchestration/debate.js';
+import {isRunCancelled} from '../runtime/cancellation.js';
 import {createExecutionSession, type ExecutionEvent} from '../runtime/execution.js';
 import type {ToolApprovalMode, WebSearchProvider} from '../tools/types.js';
 import {
@@ -22,6 +23,7 @@ import {
 	stripTerminalMouseSequences,
 	type TerminalMouseEvent
 } from './mouse.js';
+import {ApprovalRequestQueue, type QueuedApproval} from './approval-queue.js';
 import {Panel} from './Panel.js';
 import {TaskGraph} from './TaskGraph.js';
 
@@ -48,11 +50,6 @@ type TranscriptEntry = {
 	kind: EntryKind;
 	source?: string;
 	text: string;
-};
-
-type PendingApproval = {
-	message: string;
-	resolve: (approved: boolean) => void;
 };
 
 type AgentDraft = {
@@ -88,7 +85,7 @@ const defaultAgentDraft: AgentDraft = {
 	role: 'Project-aware coding assistant',
 	goal: 'Help the user inspect, understand, and change this project accurately',
 	model: '',
-	tools: 'read_file, write_file, append_to_file, list_directory, search_files, execute_command, web_search, fetch_url',
+	tools: 'read_file, write_file, append_to_file, list_directory, search_files, execute_command, web_search, fetch_url, message_agent',
 	memoryEnabled: true
 };
 
@@ -242,6 +239,10 @@ function compactToolActivity(toolName: string, input: unknown): string {
 		return `Running command "${oneLine(toolInputString(input, 'command') ?? 'command', 80)}"`;
 	}
 
+	if (toolName === 'message_agent') {
+		return `Messaging ${oneLine(toolInputString(input, 'to') ?? 'agent', 80)}`;
+	}
+
 	return `Using ${toolName}`;
 }
 
@@ -330,6 +331,10 @@ function statusIcon(status: AgentRuntimeStatus | 'idle', isSelected: boolean, sp
 		return '!';
 	}
 
+	if (status === 'cancelled') {
+		return 'x';
+	}
+
 	return isSelected ? '>' : ' ';
 }
 
@@ -390,11 +395,13 @@ export function Dashboard({
 	const [memoryVisible, setMemoryVisible] = useState(true);
 	const [scrollOffset, setScrollOffset] = useState(0);
 	const [isRunning, setIsRunning] = useState(false);
-	const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
+	const [pendingApproval, setPendingApproval] = useState<QueuedApproval | null>(null);
+	const [approvalQueueSize, setApprovalQueueSize] = useState(0);
 	const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentRuntimeStatus>>({});
 	const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
 	const [pendingPlan, setPendingPlan] = useState<MultiAgentPlan | null>(null);
 	const [spinnerIndex, setSpinnerIndex] = useState(0);
+	const approvalQueueRef = useRef(new ApprovalRequestQueue());
 	const conversationsRef = useRef<Record<string, ModelMessage[]>>({});
 	const multiStreamEntriesRef = useRef<Record<string, number>>({});
 	const planApprovalResolveRef = useRef<((plan: MultiAgentPlan) => void) | null>(null);
@@ -403,6 +410,7 @@ export function Dashboard({
 	const currentRunStepLabelsRef = useRef<string[]>([]);
 	const currentRunToolEntryIdsRef = useRef<Set<number>>(new Set());
 	const currentRunToolEntriesByCallRef = useRef<Map<string, number>>(new Map());
+	const activeRunAbortRef = useRef<AbortController | null>(null);
 
 	useEffect(() => {
 		setConfiguredAgents(agents);
@@ -541,6 +549,10 @@ export function Dashboard({
 			? 'Ask the agent team to...'
 			: `Ask ${selectedAgentName} to...`
 		: `Run ${COMMAND_NAME} init or create an agent`;
+	const promptComposerActive = inputEnabled && modal === null && pendingApproval === null && pendingPlan === null && !isRunning;
+	const inactivePromptText = pendingApproval !== null
+		? 'Waiting for tool approval: press y or n'
+		: inputValue.length > 0 ? inputValue : promptPlaceholder;
 
 	const refreshAgents = async (): Promise<void> => {
 		if (config === null) {
@@ -631,9 +643,70 @@ export function Dashboard({
 		}
 	};
 
-	const requestApprovalInUi = (message: string, _preview?: string): Promise<boolean> => new Promise((resolve) => {
-		setPendingApproval({message, resolve});
+	const syncApprovalState = (): void => {
+		setPendingApproval(approvalQueueRef.current.current());
+		setApprovalQueueSize(approvalQueueRef.current.queuedCount());
+	};
+
+	const requestApprovalInUi = (message: string, _preview?: string, abortSignal?: AbortSignal): Promise<boolean> => new Promise((resolve) => {
+		let requestId = 0;
+		const cleanup = (): void => {
+			abortSignal?.removeEventListener('abort', abort);
+		};
+		const wrappedResolve = (approved: boolean): void => {
+			cleanup();
+			resolve(approved);
+		};
+		const abort = (): void => {
+			if (requestId !== 0) {
+				approvalQueueRef.current.cancel(requestId, false);
+				syncApprovalState();
+			}
+		};
+		const request = approvalQueueRef.current.enqueue(message, wrappedResolve);
+		requestId = request.id;
+
+		if (abortSignal?.aborted === true) {
+			abort();
+			return;
+		}
+
+		abortSignal?.addEventListener('abort', abort, {once: true});
+		syncApprovalState();
 	});
+
+	const answerPendingApproval = (approved: boolean): void => {
+		const resolved = approvalQueueRef.current.resolveActive(approved);
+
+		if (resolved === null) {
+			return;
+		}
+
+		appendEntry('system', `${approved ? 'Approved' : 'Declined'}: ${resolved.message}`);
+		syncApprovalState();
+	};
+
+	const cancelActiveRun = (): void => {
+		if (!isRunning && pendingPlan === null && pendingApproval === null) {
+			return;
+		}
+
+		activeRunAbortRef.current?.abort(new Error('Run cancelled by user.'));
+		approvalQueueRef.current.clear(false);
+		syncApprovalState();
+
+		if (pendingPlan !== null && planApprovalResolveRef.current !== null) {
+			planApprovalResolveRef.current(pendingPlan);
+			planApprovalResolveRef.current = null;
+			setPendingPlan(null);
+		}
+
+		setAgentStatuses((statuses) => Object.fromEntries(Object.entries(statuses).map(([name, statusValue]) => [
+			name,
+			statusValue === 'running' ? 'cancelled' : statusValue
+		])));
+		appendEntry('system', 'Run cancellation requested.');
+	};
 
 	const handleExecutionEvent = (event: ExecutionEvent): void => {
 		if (event.type === 'tool_started') {
@@ -695,7 +768,8 @@ export function Dashboard({
 				].join('\n\n'),
 				agents: configuredAgents,
 				orchestrator: effectiveOrchestrator,
-				llmClient: plannerClient
+				llmClient: plannerClient,
+				abortSignal: activeRunAbortRef.current?.signal
 			});
 
 			if (nextPlan.steps.length > 1) {
@@ -708,6 +782,7 @@ export function Dashboard({
 						config,
 						llmClient: plannerClient,
 						agents: configuredAgents,
+						abortSignal: activeRunAbortRef.current?.signal,
 						callbacks: {
 							onDebateMessage: (message) => {
 								appendEntry('debate', message.content, debateSource(message));
@@ -746,6 +821,8 @@ export function Dashboard({
 		const session = createExecutionSession({
 			onEvent: handleExecutionEvent
 		});
+		const abortController = new AbortController();
+		activeRunAbortRef.current = abortController;
 
 		setAgentStatuses((statuses) => ({...statuses, [agent.name]: 'running'}));
 		setIsRunning(true);
@@ -757,6 +834,7 @@ export function Dashboard({
 			conversation,
 			llmClient,
 			session,
+			abortSignal: abortController.signal,
 			toolContext: {
 				workingDirectory: config.project.workingDirectory,
 				approvalMode,
@@ -775,9 +853,15 @@ export function Dashboard({
 		}).catch((error: unknown) => {
 			collapseRunSteps(assistantEntryId);
 			updateEntry(assistantEntryId, (text) => text.length === 0 ? '(no response)' : text);
-			appendEntry('error', error instanceof Error ? error.message : String(error));
-			setAgentStatuses((statuses) => ({...statuses, [agent.name]: 'failed'}));
+			appendEntry(isRunCancelled(error) ? 'system' : 'error', isRunCancelled(error) ? 'Run cancelled.' : error instanceof Error ? error.message : String(error));
+			setAgentStatuses((statuses) => ({...statuses, [agent.name]: isRunCancelled(error) ? 'cancelled' : 'failed'}));
 		}).finally(() => {
+			if (activeRunAbortRef.current === abortController) {
+				activeRunAbortRef.current = null;
+			}
+
+			approvalQueueRef.current.clear(false);
+			syncApprovalState();
 			setIsRunning(false);
 		});
 	};
@@ -796,6 +880,8 @@ export function Dashboard({
 		multiStreamEntriesRef.current = {};
 		setAgentStatuses(Object.fromEntries(configuredAgents.map((agent) => [agent.name, 'idle'])));
 		setIsRunning(true);
+		const abortController = new AbortController();
+		activeRunAbortRef.current = abortController;
 
 		void runMultiAgentTask({
 			config,
@@ -806,6 +892,7 @@ export function Dashboard({
 			webSearchProvider,
 			llmClient,
 			enableDebate: true,
+			abortSignal: abortController.signal,
 			toolContext: {
 				requestApproval: requestApprovalInUi,
 				onPreview: (preview) => {
@@ -848,11 +935,17 @@ export function Dashboard({
 			}
 		}).then((result) => {
 			collapseRunSteps();
-			appendEntry(result.success ? 'assistant' : 'error', formatMultiAgentResult(result), 'orchestrator');
+			appendEntry(result.session.cancelled === true ? 'system' : result.success ? 'assistant' : 'error', formatMultiAgentResult(result), 'orchestrator');
 		}).catch((error: unknown) => {
 			collapseRunSteps();
-			appendEntry('error', error instanceof Error ? error.message : String(error));
+			appendEntry(isRunCancelled(error) ? 'system' : 'error', isRunCancelled(error) ? 'Run cancelled.' : error instanceof Error ? error.message : String(error));
 		}).finally(() => {
+			if (activeRunAbortRef.current === abortController) {
+				activeRunAbortRef.current = null;
+			}
+
+			approvalQueueRef.current.clear(false);
+			syncApprovalState();
 			setPendingPlan(null);
 			planApprovalResolveRef.current = null;
 			setIsRunning(false);
@@ -954,6 +1047,13 @@ export function Dashboard({
 				setTranscript([]);
 				setScrollOffset(0);
 			}
+		},
+		{
+			id: 'cancel',
+			title: 'Cancel run',
+			detail: 'Stop the active agent task.',
+			search: 'cancel stop abort running task',
+			run: cancelActiveRun
 		},
 		{
 			id: 'help',
@@ -1078,24 +1178,30 @@ export function Dashboard({
 		}
 
 		if (key.ctrl && input === 'c') {
+			if (isRunning || pendingPlan !== null || pendingApproval !== null) {
+				cancelActiveRun();
+				return;
+			}
+
 			exit();
 			return;
 		}
 
 		if (pendingApproval !== null) {
 			if (input.toLowerCase() === 'y') {
-				pendingApproval.resolve(true);
-				appendEntry('system', `Approved: ${pendingApproval.message}`);
-				setPendingApproval(null);
+				answerPendingApproval(true);
 				return;
 			}
 
 			if (input.toLowerCase() === 'n' || key.escape) {
-				pendingApproval.resolve(false);
-				appendEntry('system', `Declined: ${pendingApproval.message}`);
-				setPendingApproval(null);
+				answerPendingApproval(false);
 				return;
 			}
+		}
+
+		if (key.escape && isRunning && modal === null && pendingPlan === null) {
+			cancelActiveRun();
+			return;
 		}
 
 		if (modal === 'settings') {
@@ -1267,7 +1373,7 @@ export function Dashboard({
 					{configuredAgents.map((agent, index) => {
 						const selected = index === selectedAgentIndex && !addAgentSelected;
 						const statusValue = agentStatuses[agent.name] ?? 'idle';
-						const color = statusValue === 'failed' ? 'red' : statusValue === 'running' ? 'cyan' : selected ? 'cyan' : undefined;
+						const color = statusValue === 'failed' ? 'red' : statusValue === 'cancelled' ? 'yellow' : statusValue === 'running' ? 'cyan' : selected ? 'cyan' : undefined;
 						return (
 							<Box key={agent.name} flexDirection="column" marginBottom={1}>
 								<Text color={color}>
@@ -1305,6 +1411,7 @@ export function Dashboard({
 					)}
 					{!isSetupMissing && !isAgentsMissing && pendingPlan !== null && (
 						<TaskGraph
+							agentNames={configuredAgents.map((agent) => agent.name)}
 							plan={pendingPlan}
 							onApprove={handlePlanApproved}
 							onEdit={handlePlanEdit}
@@ -1428,33 +1535,39 @@ export function Dashboard({
 					<Text>Click agents to select them, or click [+] New agent to create one</Text>
 					<Text>Up/down selects agents when the prompt is empty</Text>
 					<Text>PageUp/PageDown scrolls the session</Text>
-					<Text>Esc closes popups, Ctrl+C exits</Text>
+					<Text>Ctrl+C cancels a running task, then exits when idle</Text>
+					<Text>Esc closes popups or cancels a running task</Text>
 				</Box>
 			)}
 
 			<Box flexDirection="column" paddingX={1}>
 				{pendingApproval !== null && (
-					<Box>
-						<Text color="yellow">Approve? y/n </Text>
+					<Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
+						<Text color="yellow" bold>Tool approval required{approvalQueueSize > 0 ? ` (${approvalQueueSize} queued)` : ''}</Text>
 						<Text>{pendingApproval.message}</Text>
+						<Text dimColor>Press y to approve, n to decline. The run continues after each queued approval.</Text>
 					</Box>
 				)}
 				<Box justifyContent="space-between">
 					<Box flexGrow={1}>
 						<Text color="cyan">&gt; </Text>
-						<TextInput
-							value={inputValue}
-							onChange={(value) => {
-								setInputValue(stripTerminalMouseSequences(value));
-							}}
-							onSubmit={submitPrompt}
-							placeholder={promptPlaceholder}
-							focus={inputEnabled && modal === null && pendingApproval === null && !isRunning}
-						/>
+						{promptComposerActive ? (
+							<TextInput
+								value={inputValue}
+								onChange={(value) => {
+									setInputValue(stripTerminalMouseSequences(value));
+								}}
+								onSubmit={submitPrompt}
+								placeholder={promptPlaceholder}
+								focus
+							/>
+						) : (
+							<Text dimColor>{inactivePromptText}</Text>
+						)}
 					</Box>
 					<Text inverse> {status} </Text>
 				</Box>
-				<Text dimColor>/ actions | click [+] new agent | mouse wheel scroll | PageUp/PageDown scroll | Ctrl+C exit</Text>
+				<Text dimColor>/ actions | click [+] new agent | mouse wheel scroll | PageUp/PageDown scroll | Ctrl+C cancel/exit</Text>
 			</Box>
 		</Box>
 	);

@@ -2,6 +2,7 @@ import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {confirm} from '@inquirer/prompts';
 import {createTwoFilesPatch} from 'diff';
+import {throwIfAborted} from '../runtime/cancellation.js';
 import type {ToolApprovalMode, ToolContext} from './types.js';
 
 export class ToolSafetyError extends Error {
@@ -56,6 +57,7 @@ function approvalFromEnvironment(): ToolApprovalMode | null {
 }
 
 export async function requestApproval(message: string, context: ToolContext, preview?: string): Promise<boolean> {
+	throwIfAborted(context.abortSignal);
 	const environmentMode = approvalFromEnvironment();
 
 	if (preview !== undefined) {
@@ -71,7 +73,9 @@ export async function requestApproval(message: string, context: ToolContext, pre
 	}
 
 	if (context.requestApproval !== undefined) {
-		return context.requestApproval(message, preview);
+		const approved = await context.requestApproval(message, preview, context.abortSignal);
+		throwIfAborted(context.abortSignal);
+		return approved;
 	}
 
 	const mode = context.approvalMode;
@@ -84,10 +88,12 @@ export async function requestApproval(message: string, context: ToolContext, pre
 		return false;
 	}
 
-	return confirm({
+	const approved = await confirm({
 		message,
 		default: false
 	});
+	throwIfAborted(context.abortSignal);
+	return approved;
 }
 
 export async function writeTextFile(filePath: string, content: string): Promise<void> {

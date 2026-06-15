@@ -9,6 +9,7 @@ import {runMultiAgentTask} from '../src/orchestration/run.js';
 import {loadRecordedSession} from '../src/orchestration/session-recorder.js';
 import type {LlmClient, LlmStreamOptions} from '../src/chat/run.js';
 import type {PolycodeConfig} from '../src/domain.js';
+import {ApprovalRequestQueue} from '../src/ui/approval-queue.js';
 
 let workspace = '';
 
@@ -86,6 +87,75 @@ class DelayedLlmClient implements LlmClient {
 	}
 }
 
+class ToolWritingLlmClient implements LlmClient {
+	readonly executionOrder: string[] = [];
+
+	async *streamText(options: LlmStreamOptions): AsyncIterable<string> {
+		const lastMessage = options.messages.at(-1);
+		const content = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+		const tools = options.tools as Record<string, {execute?: (input: {path: string; content: string}) => Promise<{ok: boolean; message: string}>}> | undefined;
+
+		if (content.includes('Unit testing findings')) {
+			this.executionOrder.push('unit');
+			const result = await tools?.write_file?.execute?.({
+				path: 'findings-unit-testing.md',
+				content: '# Unit Testing\n\nUnit testing findings.'
+			});
+
+			if (result?.ok !== true) {
+				throw new Error(result?.message ?? 'unit write failed');
+			}
+
+			yield 'unit findings written';
+			return;
+		}
+
+		if (content.includes('E2E testing findings')) {
+			this.executionOrder.push('e2e');
+			const result = await tools?.write_file?.execute?.({
+				path: 'findings-e2e-testing.md',
+				content: '# E2E Testing\n\nE2E testing findings.'
+			});
+
+			if (result?.ok !== true) {
+				throw new Error(result?.message ?? 'e2e write failed');
+			}
+
+			yield 'e2e findings written';
+			return;
+		}
+
+		this.executionOrder.push('report');
+		yield 'combined report written';
+	}
+}
+
+class MessagingLlmClient implements LlmClient {
+	async *streamText(options: LlmStreamOptions): AsyncIterable<string> {
+		const tools = options.tools as Record<string, {execute?: (input: {to: string; message: string; expect_response: boolean}) => Promise<{ok: boolean; message: string}>}> | undefined;
+		const result = await tools?.message_agent?.execute?.({
+			to: 'writer',
+			message: 'Need a report outline from you.',
+			expect_response: true
+		});
+		yield result?.message ?? 'no message tool';
+	}
+}
+
+class ReassigningLlmClient implements LlmClient {
+	readonly agentsCalled: string[] = [];
+
+	async *streamText(options: LlmStreamOptions): AsyncIterable<string> {
+		this.agentsCalled.push(options.agent.name);
+
+		if (options.agent.name === 'researcher') {
+			throw new Error('researcher failed');
+		}
+
+		yield `fallback handled by ${options.agent.name}`;
+	}
+}
+
 beforeEach(async () => {
 	workspace = await mkdtemp(path.join(os.tmpdir(), 'polycode-orchestration-'));
 });
@@ -132,6 +202,196 @@ describe('Phase 4 orchestration', () => {
 		expect(llmClient.maxActive).toBeGreaterThan(1);
 		expect(result.session.messages.some((message) => message.type === 'request')).toBe(true);
 		expect(result.session.messages.some((message) => message.type === 'response')).toBe(true);
+	});
+
+	it('continues to dependent steps after multiple parallel write approvals', async () => {
+		const approvalQueue = new ApprovalRequestQueue();
+		const approvalPrompts: string[] = [];
+		const llmClient = new ToolWritingLlmClient();
+		const writeAgents: AgentDefinition[] = agents.map((agent) => ({
+			...agent,
+			tools: agent.name === 'writer' ? [] : ['write_file']
+		}));
+
+		const result = await runMultiAgentTask({
+			config: config(),
+			agents: writeAgents,
+			orchestrator: {
+				...orchestrator,
+				max_parallel_agents: 2
+			},
+			task: 'Create unit and e2e findings, then synthesize a report',
+			approvalMode: 'prompt',
+			llmClient,
+			plan: {
+				id: 'parallel-write-plan',
+				task: 'Create unit and e2e findings, then synthesize a report',
+				strategy: 'plan_and_execute',
+				createdAt: '2026-01-01T00:00:00.000Z',
+				source: 'dynamic',
+				steps: [
+					{
+						id: 'unit',
+						title: 'Unit testing findings',
+						agentName: 'researcher',
+						prompt: 'Unit testing findings',
+						dependsOn: [],
+						status: 'pending'
+					},
+					{
+						id: 'e2e',
+						title: 'E2E testing findings',
+						agentName: 'analyst',
+						prompt: 'E2E testing findings',
+						dependsOn: [],
+						status: 'pending'
+					},
+					{
+						id: 'report',
+						title: 'Synthesize report',
+						agentName: 'writer',
+						prompt: 'Synthesize the unit and e2e findings into a report.',
+						dependsOn: ['unit', 'e2e'],
+						status: 'pending'
+					}
+				]
+			},
+			saveSession: false,
+			toolContext: {
+				requestApproval: (message) => new Promise((resolve) => {
+					approvalPrompts.push(message);
+					approvalQueue.enqueue(message, resolve);
+					setTimeout(() => {
+						approvalQueue.resolveActive(true);
+					}, 5);
+				})
+			}
+		});
+
+		expect(result.success).toBe(true);
+		expect(result.session.steps.map((step) => step.stepId)).toEqual(['unit', 'e2e', 'report']);
+		expect(llmClient.executionOrder.at(-1)).toBe('report');
+		expect(approvalPrompts.filter((prompt) => prompt.includes('write_file'))).toHaveLength(2);
+		expect(approvalPrompts.length).toBeGreaterThanOrEqual(2);
+		expect(existsSync(path.join(workspace, 'findings-unit-testing.md'))).toBe(true);
+		expect(existsSync(path.join(workspace, 'findings-e2e-testing.md'))).toBe(true);
+	});
+
+	it('lets agents send messages to other agents during execution', async () => {
+		const result = await runMultiAgentTask({
+			config: config(),
+			agents,
+			orchestrator,
+			task: 'Ask writer for outline',
+			approvalMode: 'allow',
+			llmClient: new MessagingLlmClient(),
+			plan: {
+				id: 'message-plan',
+				task: 'Ask writer for outline',
+				strategy: 'plan_and_execute',
+				createdAt: '2026-01-01T00:00:00.000Z',
+				source: 'dynamic',
+				steps: [
+					{
+						id: 'ask',
+						title: 'Ask writer',
+						agentName: 'researcher',
+						prompt: 'Ask the writer for an outline.',
+						dependsOn: [],
+						status: 'pending'
+					}
+				]
+			},
+			saveSession: false
+		});
+
+		expect(result.success).toBe(true);
+		expect(result.session.messages.some((message) => message.from === 'researcher' && message.to === 'writer' && message.type === 'request')).toBe(true);
+		expect(result.session.messages.some((message) => message.from === 'writer' && message.to === 'researcher' && message.type === 'response')).toBe(true);
+	});
+
+	it('reassigns a failed step to another agent before giving up', async () => {
+		const llmClient = new ReassigningLlmClient();
+		const result = await runMultiAgentTask({
+			config: config(),
+			agents,
+			orchestrator,
+			task: 'Recover from a failed researcher',
+			approvalMode: 'allow',
+			llmClient,
+			maxStepRetries: 0,
+			plan: {
+				id: 'reassign-plan',
+				task: 'Recover from a failed researcher',
+				strategy: 'plan_and_execute',
+				createdAt: '2026-01-01T00:00:00.000Z',
+				source: 'dynamic',
+				steps: [
+					{
+						id: 'recover',
+						title: 'Recover',
+						agentName: 'researcher',
+						prompt: 'Recover this task.',
+						dependsOn: [],
+						status: 'pending'
+					}
+				]
+			},
+			saveSession: false
+		});
+
+		expect(result.success).toBe(true);
+		expect(result.session.steps[0]?.agentName).toBe('analyst');
+		expect(llmClient.agentsCalled).toEqual(['researcher', 'analyst']);
+	});
+
+	it('records cancellation when the run aborts mid-step', async () => {
+		const controller = new AbortController();
+		const llmClient: LlmClient = {
+			async *streamText(options: LlmStreamOptions): AsyncIterable<string> {
+				await new Promise<void>((_resolve, reject) => {
+					options.abortSignal?.addEventListener('abort', () => {
+						reject(new Error('aborted by test'));
+					}, {once: true});
+					setTimeout(() => {
+						controller.abort(new Error('Run cancelled by test.'));
+					}, 5);
+				});
+				yield 'late output';
+			}
+		};
+
+		const result = await runMultiAgentTask({
+			config: config(),
+			agents,
+			orchestrator,
+			task: 'Cancel this run',
+			approvalMode: 'allow',
+			llmClient,
+			abortSignal: controller.signal,
+			plan: {
+				id: 'cancel-plan',
+				task: 'Cancel this run',
+				strategy: 'plan_and_execute',
+				createdAt: '2026-01-01T00:00:00.000Z',
+				source: 'dynamic',
+				steps: [
+					{
+						id: 'cancel',
+						title: 'Cancel',
+						agentName: 'researcher',
+						prompt: 'Wait until cancelled.',
+						dependsOn: [],
+						status: 'pending'
+					}
+				]
+			},
+			saveSession: false
+		});
+
+		expect(result.success).toBe(false);
+		expect(result.session.cancelled).toBe(true);
+		expect(result.session.steps[0]?.status).toBe('cancelled');
 	});
 
 	it('uses an LLM-generated dynamic plan when strategy is dynamic', async () => {

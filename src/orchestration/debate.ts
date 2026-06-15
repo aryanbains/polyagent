@@ -1,6 +1,7 @@
 import type {AgentDefinition} from '../agents/schema.js';
 import type {LlmClient} from '../chat/run.js';
 import type {PolycodeConfig} from '../domain.js';
+import {throwIfAborted} from '../runtime/cancellation.js';
 import type {MultiAgentPlan, MultiAgentPlanStep} from './planner.js';
 
 export type DebateMessage = {
@@ -38,6 +39,7 @@ export type DebateOptions = {
 		onDebateMessage?: (message: DebateMessage) => void;
 	};
 	maxRounds?: 1 | 2 | 3;
+	abortSignal?: AbortSignal;
 };
 
 const advocatePrompt = 'You are the Advocate in a plan review. Your job is to identify the 3 strongest reasons this execution plan will succeed for the given task. Be specific - reference actual step names, agent assignments, and prompt quality. Output numbered points only.';
@@ -87,15 +89,19 @@ async function collectVirtualAgentOutput(options: {
 	agent: AgentDefinition;
 	system: string;
 	content: string;
+	abortSignal?: AbortSignal;
 }): Promise<string> {
 	let output = '';
+	throwIfAborted(options.abortSignal);
 
 	for await (const token of options.llmClient.streamText({
 		config: options.config,
 		agent: options.agent,
 		system: options.system,
-		messages: [{role: 'user', content: options.content}]
+		messages: [{role: 'user', content: options.content}],
+		abortSignal: options.abortSignal
 	})) {
+		throwIfAborted(options.abortSignal);
 		output += token;
 	}
 
@@ -226,6 +232,7 @@ export function applyModifications(
 }
 
 export async function runAgentDebate(options: DebateOptions): Promise<DebateOutcome> {
+	throwIfAborted(options.abortSignal);
 	const maxRounds = options.maxRounds ?? 2;
 	const planText = formatPlan(options.plan);
 	const rounds: DebateMessage[] = [];
@@ -238,7 +245,8 @@ export async function runAgentDebate(options: DebateOptions): Promise<DebateOutc
 		llmClient: options.llmClient,
 		agent: advocateAgent,
 		system: advocatePrompt,
-		content: [`Task:\n${options.task}`, `Execution plan:\n${planText}`].join('\n\n')
+		content: [`Task:\n${options.task}`, `Execution plan:\n${planText}`].join('\n\n'),
+		abortSignal: options.abortSignal
 	});
 	pushMessage({role: 'advocate', round: 1, content: firstAdvocate});
 
@@ -247,7 +255,8 @@ export async function runAgentDebate(options: DebateOptions): Promise<DebateOutc
 		llmClient: options.llmClient,
 		agent: skepticAgent,
 		system: skepticPrompt,
-		content: [`Task:\n${options.task}`, `Execution plan:\n${planText}`, `Advocate R1:\n${firstAdvocate}`].join('\n\n')
+		content: [`Task:\n${options.task}`, `Execution plan:\n${planText}`, `Advocate R1:\n${firstAdvocate}`].join('\n\n'),
+		abortSignal: options.abortSignal
 	});
 	pushMessage({role: 'skeptic', round: 1, content: firstSkeptic});
 
@@ -263,7 +272,8 @@ export async function runAgentDebate(options: DebateOptions): Promise<DebateOutc
 				'Prior debate:',
 				formatTranscript(rounds),
 				'Respond directly to each Skeptic point.'
-			].join('\n\n')
+			].join('\n\n'),
+			abortSignal: options.abortSignal
 		});
 		pushMessage({role: 'advocate', round: round as 2 | 3, content: advocateResponse});
 
@@ -278,7 +288,8 @@ export async function runAgentDebate(options: DebateOptions): Promise<DebateOutc
 				'Prior debate:',
 				formatTranscript(rounds),
 				'Give final objections or acceptance.'
-			].join('\n\n')
+			].join('\n\n'),
+			abortSignal: options.abortSignal
 		});
 		pushMessage({role: 'skeptic', round: round as 2 | 3, content: skepticResponse});
 	}
@@ -293,7 +304,8 @@ export async function runAgentDebate(options: DebateOptions): Promise<DebateOutc
 			`Execution plan:\n${planText}`,
 			'Debate transcript:',
 			formatTranscript(rounds)
-		].join('\n\n')
+		].join('\n\n'),
+		abortSignal: options.abortSignal
 	});
 	const judge = parseJudgeOutcome(judgeResponse);
 

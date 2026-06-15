@@ -3,12 +3,14 @@ import {Box, Text, useInput} from 'ink';
 import TextInput from 'ink-text-input';
 import type {MultiAgentPlan} from '../orchestration/planner.js';
 import {computeEdges, computeStepSummary, computeWaves} from '../orchestration/graph.js';
+import {stripTerminalMouseSequences} from './mouse.js';
 
 type TaskGraphProps = {
 	plan: MultiAgentPlan;
 	onApprove: (plan: MultiAgentPlan) => void;
 	onEdit: (stepId: string, newPrompt: string) => void;
 	onReplan: (reason: string) => void;
+	agentNames?: string[];
 	interactive?: boolean;
 	testInput?: {
 		id: number;
@@ -17,7 +19,7 @@ type TaskGraphProps = {
 	};
 };
 
-type Mode = 'view' | 'edit' | 'replan';
+type Mode = 'view' | 'edit' | 'edit-dependencies' | 'edit-prompt' | 'replan';
 type GraphKey = {
 	upArrow: boolean;
 	downArrow: boolean;
@@ -39,7 +41,7 @@ function truncate(value: string, maxLength: number): string {
 		return normalized;
 	}
 
-	return `${normalized.slice(0, Math.max(maxLength - 1, 1))}…`;
+	return `${normalized.slice(0, Math.max(maxLength - 3, 1))}...`;
 }
 
 function clonePlan(plan: MultiAgentPlan): MultiAgentPlan {
@@ -49,22 +51,40 @@ function clonePlan(plan: MultiAgentPlan): MultiAgentPlan {
 	};
 }
 
-export function TaskGraph({interactive = true, plan, onApprove, onEdit, onReplan, testInput}: TaskGraphProps): JSX.Element {
+function cleanInputValue(value: string): string {
+	return stripTerminalMouseSequences(value);
+}
+
+function uniqueStepId(plan: MultiAgentPlan): string {
+	const ids = new Set(plan.steps.map((step) => step.id));
+	let index = plan.steps.length + 1;
+	let id = `step_${index}`;
+
+	while (ids.has(id)) {
+		index += 1;
+		id = `step_${index}`;
+	}
+
+	return id;
+}
+
+export function TaskGraph({agentNames, interactive = true, plan, onApprove, onEdit, onReplan, testInput}: TaskGraphProps): JSX.Element {
 	const [mode, setMode] = useState<Mode>('view');
 	const [selectedStepIndex, setSelectedStepIndex] = useState(0);
 	const [editValue, setEditValue] = useState('');
-	const [isEditingPrompt, setIsEditingPrompt] = useState(false);
 	const [replanReason, setReplanReason] = useState('');
 	const [localPlan, setLocalPlan] = useState<MultiAgentPlan>(() => clonePlan(plan));
 	const waves = computeWaves(localPlan.steps);
 	const edges = computeEdges(localPlan.steps);
 	const selectedStep = localPlan.steps[selectedStepIndex];
+	const selectableAgents = agentNames !== undefined && agentNames.length > 0
+		? agentNames
+		: [...new Set(localPlan.steps.map((step) => step.agentName))];
 
 	useEffect(() => {
 		setLocalPlan(clonePlan(plan));
 		setSelectedStepIndex(0);
 		setEditValue('');
-		setIsEditingPrompt(false);
 		setReplanReason('');
 		setMode('view');
 	}, [plan]);
@@ -82,8 +102,80 @@ export function TaskGraph({interactive = true, plan, onApprove, onEdit, onReplan
 		setLocalPlan(nextPlan);
 		onEdit(selectedStep.id, value);
 		setEditValue('');
-		setIsEditingPrompt(false);
 		setMode('view');
+	};
+
+	const saveDependencies = (value: string): void => {
+		if (selectedStep === undefined) {
+			return;
+		}
+
+		const knownStepIds = new Set(localPlan.steps.map((step) => step.id));
+		const dependsOn = value
+			.split(',')
+			.map((item) => item.trim())
+			.filter((item) => item.length > 0 && item !== selectedStep.id && knownStepIds.has(item));
+
+		setLocalPlan((current) => ({
+			...current,
+			steps: current.steps.map((step) => step.id === selectedStep.id ? {...step, dependsOn} : step)
+		}));
+		setEditValue('');
+		setMode('view');
+	};
+
+	const cycleSelectedAgent = (): void => {
+		if (selectedStep === undefined || selectableAgents.length === 0) {
+			return;
+		}
+
+		const index = selectableAgents.indexOf(selectedStep.agentName);
+		const nextAgent = selectableAgents[(Math.max(index, 0) + 1) % selectableAgents.length]!;
+		setLocalPlan((current) => ({
+			...current,
+			steps: current.steps.map((step) => step.id === selectedStep.id ? {...step, agentName: nextAgent} : step)
+		}));
+	};
+
+	const addStepAfterSelected = (): void => {
+		const id = uniqueStepId(localPlan);
+		const insertIndex = selectedStepIndex + 1;
+		const newStep = {
+			id,
+			title: 'New step',
+			agentName: selectedStep?.agentName ?? selectableAgents[0] ?? 'agent',
+			prompt: 'Describe this step before approving the plan.',
+			dependsOn: selectedStep === undefined ? [] : [selectedStep.id],
+			status: 'pending' as const
+		};
+
+		setLocalPlan((current) => ({
+			...current,
+			steps: [
+				...current.steps.slice(0, insertIndex),
+				newStep,
+				...current.steps.slice(insertIndex)
+			]
+		}));
+		setSelectedStepIndex(insertIndex);
+	};
+
+	const deleteSelectedStep = (): void => {
+		if (selectedStep === undefined || localPlan.steps.length <= 1) {
+			return;
+		}
+
+		const deletedId = selectedStep.id;
+		setLocalPlan((current) => ({
+			...current,
+			steps: current.steps
+				.filter((step) => step.id !== deletedId)
+				.map((step) => ({
+					...step,
+					dependsOn: step.dependsOn.filter((dependency) => dependency !== deletedId)
+				}))
+		}));
+		setSelectedStepIndex((index) => Math.min(index, Math.max(localPlan.steps.length - 2, 0)));
 	};
 
 	const handleGraphInput = (input: string, keyInput: Partial<GraphKey>, fromTest = false): void => {
@@ -102,25 +194,43 @@ export function TaskGraph({interactive = true, plan, onApprove, onEdit, onReplan
 			}
 
 			if (fromTest && input.length > 0) {
-				setReplanReason((value) => value + input);
+				setReplanReason((value) => cleanInputValue(value + input));
 			}
 
 			return;
 		}
 
-		if (mode === 'edit' && isEditingPrompt) {
+		if (mode === 'edit-prompt') {
 			if (fromTest && key.return) {
 				saveEdit(editValue);
 				return;
 			}
 
 			if (key.escape) {
-				setIsEditingPrompt(false);
+				setMode('edit');
 				return;
 			}
 
 			if (fromTest && input.length > 0) {
-				setEditValue((value) => value + input);
+				setEditValue((value) => cleanInputValue(value + input));
+			}
+
+			return;
+		}
+
+		if (mode === 'edit-dependencies') {
+			if (fromTest && key.return) {
+				saveDependencies(editValue);
+				return;
+			}
+
+			if (key.escape) {
+				setMode('edit');
+				return;
+			}
+
+			if (fromTest && input.length > 0) {
+				setEditValue((value) => cleanInputValue(value + input));
 			}
 
 			return;
@@ -164,7 +274,28 @@ export function TaskGraph({interactive = true, plan, onApprove, onEdit, onReplan
 
 			if (key.return && selectedStep !== undefined) {
 				setEditValue(selectedStep.prompt);
-				setIsEditingPrompt(true);
+				setMode('edit-prompt');
+				return;
+			}
+
+			if (input.toLowerCase() === 'a') {
+				cycleSelectedAgent();
+				return;
+			}
+
+			if (input.toLowerCase() === 'd' && selectedStep !== undefined) {
+				setEditValue(selectedStep.dependsOn.join(', '));
+				setMode('edit-dependencies');
+				return;
+			}
+
+			if (input === '+') {
+				addStepAfterSelected();
+				return;
+			}
+
+			if (input.toLowerCase() === 'x') {
+				deleteSelectedStep();
 			}
 		}
 	};
@@ -194,7 +325,7 @@ export function TaskGraph({interactive = true, plan, onApprove, onEdit, onReplan
 						<Box flexDirection="row">
 							{wave.map((step) => {
 								const index = localPlan.steps.findIndex((candidate) => candidate.id === step.id);
-								const selected = mode === 'edit' && index === selectedStepIndex;
+								const selected = (mode === 'edit' || mode === 'edit-dependencies' || mode === 'edit-prompt') && index === selectedStepIndex;
 								return (
 									<Box
 										key={step.id}
@@ -218,7 +349,7 @@ export function TaskGraph({interactive = true, plan, onApprove, onEdit, onReplan
 									const hasDependent = edges.some((edge) => edge.fromId === step.id);
 									return (
 										<Box key={`${step.id}-arrow`} width={29} marginRight={1} justifyContent="center">
-											<Text dimColor>{hasDependent ? '↓' : ' '}</Text>
+											<Text dimColor>{hasDependent ? 'v' : ' '}</Text>
 										</Box>
 									);
 								})}
@@ -227,17 +358,41 @@ export function TaskGraph({interactive = true, plan, onApprove, onEdit, onReplan
 					</Box>
 				))}
 			</Box>
-			{mode === 'view' && <Text color="green">[y] approve  [e] edit step  [n] replan</Text>}
-			{mode === 'edit' && !isEditingPrompt && (
+			{mode === 'view' && <Text color="green">[y] approve  [e] edit graph  [n] replan</Text>}
+			{mode === 'edit' && (
 				<Box flexDirection="column">
 					<Text color="yellow">Edit step: {selectedStep?.id ?? 'none'}</Text>
-					<Text dimColor>Up/down choose | Enter edit prompt | Esc cancel</Text>
+					<Text dimColor>Up/down choose | Enter prompt | a agent | d deps | + add | x delete | Esc done</Text>
 				</Box>
 			)}
-			{mode === 'edit' && isEditingPrompt && (
+			{mode === 'edit-prompt' && (
 				<Box>
 					<Text color="yellow">Prompt: </Text>
-					<TextInput focus={interactive} value={editValue} onChange={setEditValue} onSubmit={saveEdit} />
+					<TextInput
+						focus={interactive}
+						value={editValue}
+						onChange={(value) => {
+							setEditValue(cleanInputValue(value));
+						}}
+						onSubmit={(value) => {
+							saveEdit(cleanInputValue(value));
+						}}
+					/>
+				</Box>
+			)}
+			{mode === 'edit-dependencies' && (
+				<Box>
+					<Text color="yellow">Depends on: </Text>
+					<TextInput
+						focus={interactive}
+						value={editValue}
+						onChange={(value) => {
+							setEditValue(cleanInputValue(value));
+						}}
+						onSubmit={(value) => {
+							saveDependencies(cleanInputValue(value));
+						}}
+					/>
 				</Box>
 			)}
 			{mode === 'replan' && (
@@ -246,9 +401,11 @@ export function TaskGraph({interactive = true, plan, onApprove, onEdit, onReplan
 					<TextInput
 						focus={interactive}
 						value={replanReason}
-						onChange={setReplanReason}
+						onChange={(value) => {
+							setReplanReason(cleanInputValue(value));
+						}}
 						onSubmit={(value) => {
-							onReplan(value.trim());
+							onReplan(cleanInputValue(value).trim());
 						}}
 					/>
 				</Box>
