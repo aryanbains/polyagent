@@ -10,6 +10,7 @@ let temporaryDirectory = '';
 let originalApproval: string | undefined;
 let originalTavilyApiKey: string | undefined;
 let originalWebSearchProvider: string | undefined;
+let originalWebTimeout: string | undefined;
 
 function getTool(name: string): ToolDefinition {
 	const tool = getToolDefinitions().find((definition) => definition.name === name);
@@ -33,6 +34,7 @@ beforeEach(async () => {
 	originalApproval = process.env.POLYCODE_TOOL_APPROVAL;
 	originalTavilyApiKey = process.env.TAVILY_API_KEY;
 	originalWebSearchProvider = process.env.POLYCODE_WEB_SEARCH_PROVIDER;
+	originalWebTimeout = process.env.POLYCODE_WEB_TIMEOUT_MS;
 	temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'polycode-tools-'));
 });
 
@@ -53,6 +55,12 @@ afterEach(async () => {
 		delete process.env.POLYCODE_WEB_SEARCH_PROVIDER;
 	} else {
 		process.env.POLYCODE_WEB_SEARCH_PROVIDER = originalWebSearchProvider;
+	}
+
+	if (originalWebTimeout === undefined) {
+		delete process.env.POLYCODE_WEB_TIMEOUT_MS;
+	} else {
+		process.env.POLYCODE_WEB_TIMEOUT_MS = originalWebTimeout;
 	}
 
 	await rm(temporaryDirectory, {force: true, recursive: true});
@@ -273,5 +281,16 @@ describe('built-in tools', () => {
 		expect(networkResult.message).toContain('network unavailable');
 		expect(searchNetworkResult.ok).toBe(false);
 		expect(searchNetworkResult.message).toContain('offline');
+	});
+
+	it('times out slow web requests instead of hanging the run', async () => {
+		process.env.POLYCODE_WEB_TIMEOUT_MS = '5';
+
+		const result = await getTool('fetch_url').execute({url: 'https://example.com'}, context('allow', {
+			fetch: async () => new Promise<Response>(() => {})
+		}));
+
+		expect(result.ok).toBe(false);
+		expect(result.message).toContain('timed out after 5ms');
 	});
 });

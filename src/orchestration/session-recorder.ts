@@ -28,6 +28,7 @@ export type RecordedSession = {
 	executionEvents: ExecutionEvent[];
 	steps: AgentStepRecord[];
 	finalOutput: string;
+	artifacts?: string[];
 	success: boolean;
 	stats: {
 		agentsUsed: number;

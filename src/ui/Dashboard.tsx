@@ -10,7 +10,7 @@ import {APP_NAME, COMMAND_NAME, type PolycodeConfig} from '../domain.js';
 import type {MemoryStats} from '../memory/types.js';
 import {getConfigPath} from '../config/store.js';
 import {runAgentTurn, type LlmClient} from '../chat/run.js';
-import {runMultiAgentTask, type AgentRuntimeStatus} from '../orchestration/run.js';
+import {runMultiAgentTask, type AgentRuntimeStatus, type MultiAgentRunResult} from '../orchestration/run.js';
 import {createExecutionSession, type ExecutionEvent} from '../runtime/execution.js';
 import type {ToolApprovalMode, WebSearchProvider} from '../tools/types.js';
 import {
@@ -140,6 +140,31 @@ function truncate(value: string, maxLength = 3600): string {
 	}
 
 	return `${value.slice(Math.max(value.length - maxLength, 0))}`;
+}
+
+function compactPreview(preview: string): string {
+	const lines = preview.split(/\r?\n/);
+	const looksLikeDiff = lines.some((line) => line.startsWith('@@') || line.startsWith('--- ') || line.startsWith('+++ '));
+
+	if (looksLikeDiff) {
+		const added = lines.filter((line) => line.startsWith('+') && !line.startsWith('+++')).length;
+		const removed = lines.filter((line) => line.startsWith('-') && !line.startsWith('---')).length;
+		const files = lines
+			.filter((line) => line.startsWith('--- ') || line.startsWith('+++ '))
+			.map((line) => line.replace(/\t.*$/, ''))
+			.slice(0, 4);
+		return [
+			`File preview: ${added} added, ${removed} removed.`,
+			...files,
+			'Full diff hidden in the terminal UI to keep the conversation readable.'
+		].join('\n');
+	}
+
+	if (preview.length > 900 || /<html|<script|function\s|const\s|let\s|var\s|class\s|=>|\{[\s\S]*\}/i.test(preview)) {
+		return `Preview hidden (${lines.length} lines, ${preview.length} characters). Approve only if this action matches your request.`;
+	}
+
+	return preview;
 }
 
 function splitTools(value: string): string[] {
@@ -301,14 +326,24 @@ function statusIcon(status: AgentRuntimeStatus | 'idle', isSelected: boolean, sp
 	return isSelected ? '>' : ' ';
 }
 
-function formatPlanSummary(task: string, steps: Array<{id: string; title: string; agentName: string; dependsOn: string[]}>): string {
+function formatPlanSummary(steps: Array<{id: string; title: string; agentName: string; dependsOn: string[]}>): string {
 	return [
-		`Plan for: ${task}`,
+		`Plan ready (${steps.length} steps)`,
 		...steps.map((step, index) => {
 			const dependencies = step.dependsOn.length === 0 ? 'none' : step.dependsOn.join(', ');
 			return `${index + 1}. ${step.id} -> ${step.agentName}: ${step.title} (depends: ${dependencies})`;
 		})
 	].join('\n');
+}
+
+function formatMultiAgentResult(result: MultiAgentRunResult): string {
+	const lines = [result.finalOutput];
+
+	if (result.sessionPath !== null) {
+		lines.push('', `Session recorded: ${result.sessionPath}`);
+	}
+
+	return lines.join('\n');
 }
 
 export function Dashboard({
@@ -582,11 +617,7 @@ export function Dashboard({
 		}
 	};
 
-	const requestApprovalInUi = (message: string, preview?: string): Promise<boolean> => new Promise((resolve) => {
-		if (preview !== undefined && preview.length > 0) {
-			appendEntry('preview', preview);
-		}
-
+	const requestApprovalInUi = (message: string, _preview?: string): Promise<boolean> => new Promise((resolve) => {
 		setPendingApproval({message, resolve});
 	});
 
@@ -646,7 +677,7 @@ export function Dashboard({
 				webSearchProvider,
 				requestApproval: requestApprovalInUi,
 				onPreview: (preview) => {
-					appendEntry('preview', preview);
+					appendEntry('preview', compactPreview(preview));
 				}
 			},
 			onToken: (token) => {
@@ -689,32 +720,21 @@ export function Dashboard({
 			toolContext: {
 				requestApproval: requestApprovalInUi,
 				onPreview: (preview) => {
-					appendEntry('preview', preview);
+					appendEntry('preview', compactPreview(preview));
 				}
 			},
 			callbacks: {
 				onPlan: (plan) => {
-					appendEntry('system', `${formatPlanSummary(message, plan.steps)}\nsource: ${plan.source}`);
-				},
-				onMessage: (agentMessage) => {
-					appendEntry('message', `${agentMessage.type}: ${agentMessage.from} -> ${agentMessage.to}`, 'bus');
+					appendEntry('system', `${formatPlanSummary(plan.steps)}\nsource: ${plan.source}`);
 				},
 				onExecutionEvent: handleExecutionEvent,
 				onStepStart: (step) => {
-					appendEntry('system', `${step.agentName} started ${step.id}: ${step.title}`);
+					currentRunStepLabelsRef.current.push(`${step.agentName}: ${step.title}`);
 				},
 				onStepFinish: (record) => {
-					appendEntry(record.status === 'failed' ? 'error' : 'assistant', record.error ?? record.output, record.agentName);
-				},
-				onToken: (agentName, token) => {
-					let entryId = multiStreamEntriesRef.current[agentName];
-
-					if (entryId === undefined) {
-						entryId = appendEntry('assistant', '', agentName);
-						multiStreamEntriesRef.current[agentName] = entryId;
+					if (record.status === 'failed') {
+						appendEntry('error', `${record.agentName}/${record.stepId} failed: ${record.error ?? 'Unknown error'}`, record.agentName);
 					}
-
-					updateEntry(entryId, (text) => text + token);
 				},
 				onAgentStatus: (agentName, statusValue) => {
 					setAgentStatuses((statuses) => ({...statuses, [agentName]: statusValue}));
@@ -722,10 +742,7 @@ export function Dashboard({
 			}
 		}).then((result) => {
 			collapseRunSteps();
-			appendEntry(result.success ? 'system' : 'error', result.finalOutput, 'orchestrator');
-			if (result.sessionPath !== null) {
-				appendEntry('system', `Session recorded: ${result.sessionPath}`);
-			}
+			appendEntry(result.success ? 'assistant' : 'error', formatMultiAgentResult(result), 'orchestrator');
 		}).catch((error: unknown) => {
 			collapseRunSteps();
 			appendEntry('error', error instanceof Error ? error.message : String(error));
@@ -1285,8 +1302,8 @@ export function Dashboard({
 				<Box marginX={1} borderStyle="round" borderColor="cyan" paddingX={1} flexDirection="column">
 					<Text color="cyan" bold>Controls</Text>
 					<Text>/ opens searchable actions above the prompt</Text>
-					<Text>+ or a opens the agent builder</Text>
 					<Text>Type /settings, /multi, /single, or /create and press Enter</Text>
+					<Text>Click [+] New agent or use /create to open the agent builder</Text>
 					<Text>Mouse wheel scrolls the conversation panel</Text>
 					<Text>Click agents to select them, or click [+] New agent to create one</Text>
 					<Text>Up/down selects agents when the prompt is empty</Text>

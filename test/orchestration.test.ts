@@ -272,6 +272,49 @@ describe('Phase 4 orchestration', () => {
 		await expect(readFile(reportPath, 'utf8')).resolves.toContain('JavaScript testing frameworks');
 	});
 
+	it('creates default report and website artifacts without dumping raw code into final output', async () => {
+		const llmClient: LlmClient = {
+			async *streamText(options: LlmStreamOptions): AsyncIterable<string> {
+				if (options.agent.name === 'orchestrator') {
+					yield 'not json';
+					return;
+				}
+
+				yield [
+					'Research notes ready.',
+					'<html><body><script>console.log("should stay out of terminal");</script></body></html>',
+					'function noisyCode() { return true; }'
+				].join('\n');
+			}
+		};
+
+		const result = await runMultiAgentTask({
+			config: config(),
+			agents,
+			orchestrator: {
+				...orchestrator,
+				strategy: 'dynamic'
+			},
+			task: 'search about cockroach janta party, make a report .md file, and a website too in html with embedded js and css',
+			approvalMode: 'allow',
+			llmClient,
+			saveSession: false
+		});
+		const markdownPath = path.join(workspace, 'reports', 'cockroach-janta-party.md');
+		const htmlPath = path.join(workspace, 'reports', 'cockroach-janta-party.html');
+
+		expect(result.success).toBe(true);
+		expect(result.artifacts).toEqual([
+			path.join('reports', 'cockroach-janta-party.md'),
+			path.join('reports', 'cockroach-janta-party.html')
+		]);
+		expect(existsSync(markdownPath)).toBe(true);
+		expect(existsSync(htmlPath)).toBe(true);
+		expect(result.finalOutput).toContain('Files');
+		expect(result.finalOutput).not.toContain('<script>');
+		expect(result.finalOutput).not.toContain('function noisyCode');
+	});
+
 	it('loads a recorded session for replay', async () => {
 		const llmClient = new DelayedLlmClient(1);
 		const result = await runMultiAgentTask({

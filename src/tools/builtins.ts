@@ -70,6 +70,49 @@ function getFetch(context?: ToolContext): typeof fetch {
 	return context?.fetch ?? fetch;
 }
 
+function webTimeoutMs(): number {
+	const value = Number.parseInt(process.env.POLYCODE_WEB_TIMEOUT_MS ?? '', 10);
+
+	if (Number.isFinite(value) && value > 0) {
+		return Math.min(value, 120_000);
+	}
+
+	return 15_000;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string, abort?: () => void): Promise<T> {
+	let timeout: ReturnType<typeof setTimeout> | undefined;
+	const timeoutPromise = new Promise<never>((_, reject) => {
+		timeout = setTimeout(() => {
+			abort?.();
+			reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+		}, timeoutMs);
+	});
+
+	try {
+		return await Promise.race([promise, timeoutPromise]);
+	} finally {
+		if (timeout !== undefined) {
+			clearTimeout(timeout);
+		}
+	}
+}
+
+async function fetchWithTimeout(context: ToolContext, input: URL, init: RequestInit = {}): Promise<Response> {
+	const controller = new AbortController();
+	return withTimeout(
+		getFetch(context)(input, {
+			...init,
+			signal: controller.signal
+		}),
+		webTimeoutMs(),
+		'Web request',
+		() => {
+			controller.abort();
+		}
+	);
+}
+
 function resolveWebSearchProvider(context: ToolContext): WebSearchProvider {
 	const value = process.env.POLYCODE_WEB_SEARCH_PROVIDER?.toLowerCase();
 
@@ -172,7 +215,7 @@ async function duckDuckGoHtmlSearch(query: string, maxResults: number, context: 
 	let response: Response;
 
 	try {
-		response = await getFetch(context)(url, {
+		response = await fetchWithTimeout(context, url, {
 			headers: {
 				'Accept': 'text/html,application/xhtml+xml',
 				'User-Agent': 'Mozilla/5.0 Polycode/0.1'
@@ -238,7 +281,7 @@ async function duckDuckGoInstantAnswerSearch(query: string, maxResults: number, 
 	let response: Response;
 
 	try {
-		response = await getFetch(context)(url);
+		response = await fetchWithTimeout(context, url);
 	} catch (error) {
 		return {
 			ok: false,
@@ -314,11 +357,15 @@ async function tavilySearch(query: string, maxResults: number): Promise<ToolResu
 	let result: Awaited<ReturnType<typeof client.search>>;
 
 	try {
-		result = await client.search(query, {
-			maxResults,
-			includeAnswer: true,
-			searchDepth: 'basic'
-		});
+		result = await withTimeout(
+			client.search(query, {
+				maxResults,
+				includeAnswer: true,
+				searchDepth: 'basic'
+			}),
+			webTimeoutMs(),
+			'Tavily search'
+		);
 	} catch (error) {
 		return {
 			ok: false,
@@ -546,7 +593,7 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 				let response: Response;
 
 				try {
-					response = await getFetch(context)(url, {
+					response = await fetchWithTimeout(context, url, {
 						headers: {
 							'User-Agent': 'Polycode/0.1'
 						}

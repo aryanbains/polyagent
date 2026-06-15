@@ -322,14 +322,10 @@ async function runTask(task: string, options: RunCommandOptions): Promise<void> 
 				onStepFinish: (record) => {
 					const color = record.status === 'succeeded' ? chalk.green : chalk.red;
 					console.log(color(`finished ${record.stepId} ${record.status} ${record.durationMs}ms`));
-				},
-				onToken: (_agentName, token) => {
-					process.stdout.write(token);
 				}
 			}
 		});
 
-		process.stdout.write('\n');
 		console.log(chalk.bold(finalResult.finalOutput));
 		console.log(`Session: ${finalResult.sessionPath}`);
 
