@@ -3,6 +3,7 @@ import path from 'node:path';
 import type {AgentMessage} from './message-bus.js';
 import type {MultiAgentPlan} from './planner.js';
 import type {ExecutionEvent} from '../runtime/execution.js';
+import type {DebateOutcome} from './debate.js';
 
 export type AgentStepRecord = {
 	stepId: string;
@@ -24,6 +25,7 @@ export type RecordedSession = {
 	completedAt: string;
 	durationMs: number;
 	plan: MultiAgentPlan;
+	debateOutcome?: DebateOutcome;
 	messages: AgentMessage[];
 	executionEvents: ExecutionEvent[];
 	steps: AgentStepRecord[];

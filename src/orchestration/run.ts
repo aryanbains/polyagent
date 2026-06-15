@@ -15,11 +15,15 @@ import type {ToolApprovalMode, ToolContext, WebSearchProvider} from '../tools/ty
 import {createAgentMessageBus, type AgentMessage} from './message-bus.js';
 import {createPlannerDescriptor, planMultiAgentTaskDynamically, type MultiAgentPlan, type MultiAgentPlanStep} from './planner.js';
 import {type AgentStepRecord, createSessionId, type RecordedSession, saveRecordedSession} from './session-recorder.js';
+import {applyModifications, runAgentDebate, type DebateMessage, type DebateOutcome} from './debate.js';
 
 export type AgentRuntimeStatus = 'idle' | 'running' | 'succeeded' | 'failed';
 
 export type MultiAgentRunCallbacks = {
-	onPlan?: (plan: MultiAgentPlan) => void;
+	onPlan?: (plan: MultiAgentPlan) => Promise<MultiAgentPlan | void> | MultiAgentPlan | void;
+	onDebateStart?: (plan: MultiAgentPlan) => void;
+	onDebateMessage?: (message: DebateMessage) => void;
+	onDebateEnd?: (outcome: DebateOutcome) => void;
 	onMessage?: (message: AgentMessage) => void;
 	onExecutionEvent?: (event: ExecutionEvent) => void;
 	onStepStart?: (step: MultiAgentPlanStep) => void;
@@ -37,6 +41,7 @@ export type MultiAgentRunOptions = {
 	webSearchProvider?: WebSearchProvider;
 	llmClient?: LlmClient;
 	plan?: MultiAgentPlan;
+	enableDebate?: boolean;
 	toolContext?: Pick<ToolContext, 'onPreview' | 'requestApproval'>;
 	callbacks?: MultiAgentRunCallbacks;
 	saveSession?: boolean;
@@ -365,19 +370,53 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 	const stepRecords = new Map<string, AgentStepRecord>();
 	const callbacks = options.callbacks;
 	const llmClient = options.llmClient ?? new AiSdkLlmClient();
-	const plan = options.plan ?? await planMultiAgentTaskDynamically({
+	let plan = options.plan ?? await planMultiAgentTaskDynamically({
 		config: options.config,
 		task: options.task,
 		agents: options.agents,
 		orchestrator: options.orchestrator,
 		llmClient
 	});
-	const queue = new PQueue({concurrency: options.orchestrator.max_parallel_agents});
+	let debateOutcome: DebateOutcome | undefined;
 
 	messageBus.on('message', (message) => {
 		callbacks?.onMessage?.(message);
 	});
-	callbacks?.onPlan?.(plan);
+
+	if (options.enableDebate === true && plan.steps.length > 1) {
+		callbacks?.onDebateStart?.(plan);
+
+		try {
+			debateOutcome = await runAgentDebate({
+				plan,
+				task: options.task,
+				config: options.config,
+				llmClient,
+				agents: options.agents,
+				callbacks: {
+					onDebateMessage: callbacks?.onDebateMessage
+				}
+			});
+			callbacks?.onDebateEnd?.(debateOutcome);
+			plan = applyModifications(plan, debateOutcome.modifications, options.agents);
+		} catch (error) {
+			debateOutcome = {
+				approved: false,
+				modifications: [],
+				summary: `Plan review failed: ${error instanceof Error ? error.message : String(error)}. Continuing with the original plan.`,
+				rounds: []
+			};
+			callbacks?.onDebateEnd?.(debateOutcome);
+		}
+	}
+
+	const approvedPlan = await callbacks?.onPlan?.(plan);
+
+	if (approvedPlan !== undefined) {
+		plan = approvedPlan;
+	}
+
+	const queue = new PQueue({concurrency: options.orchestrator.max_parallel_agents});
 
 	const executeStep = async (step: MultiAgentPlanStep): Promise<AgentStepRecord> => {
 		const agent = findAgent(options.agents, step.agentName);
@@ -533,6 +572,7 @@ export async function runMultiAgentTask(options: MultiAgentRunOptions): Promise<
 		completedAt: completedAt.toISOString(),
 		durationMs: completedAt.getTime() - startedAt.getTime(),
 		plan,
+		...(debateOutcome === undefined ? {} : {debateOutcome}),
 		messages: messageBus.history,
 		executionEvents,
 		steps: records,

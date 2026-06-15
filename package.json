@@ -16,7 +16,7 @@
   "scripts": {
     "build": "tsup",
     "dev": "tsx src/cli.tsx",
-    "test": "vitest run test/config.test.ts test/cli.test.ts test/agents.test.ts test/chat.test.ts test/memory.test.ts test/tools.test.ts test/providers.test.ts test/dashboard.test.tsx test/multi-agent-view.test.tsx test/mouse.test.ts test/phase35.test.ts test/orchestration.test.ts",
+    "test": "vitest run test/config.test.ts test/cli.test.ts test/agents.test.ts test/chat.test.ts test/memory.test.ts test/tools.test.ts test/providers.test.ts test/dashboard.test.tsx test/multi-agent-view.test.tsx test/task-graph.test.tsx test/mouse.test.ts test/phase35.test.ts test/graph.test.ts test/debate.test.ts test/orchestration.test.ts",
     "test:e2e": "npm run build && vitest run test/e2e",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm test && npm run test:e2e"

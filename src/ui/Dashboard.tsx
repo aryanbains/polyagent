@@ -9,8 +9,10 @@ import {saveAgentsFile, upsertAgentDefinition} from '../agents/manage.js';
 import {APP_NAME, COMMAND_NAME, type PolycodeConfig} from '../domain.js';
 import type {MemoryStats} from '../memory/types.js';
 import {getConfigPath} from '../config/store.js';
-import {runAgentTurn, type LlmClient} from '../chat/run.js';
+import {AiSdkLlmClient, runAgentTurn, type LlmClient} from '../chat/run.js';
 import {runMultiAgentTask, type AgentRuntimeStatus, type MultiAgentRunResult} from '../orchestration/run.js';
+import {planMultiAgentTaskDynamically, type MultiAgentPlan} from '../orchestration/planner.js';
+import {applyModifications, runAgentDebate, type DebateMessage, type DebateOutcome} from '../orchestration/debate.js';
 import {createExecutionSession, type ExecutionEvent} from '../runtime/execution.js';
 import type {ToolApprovalMode, WebSearchProvider} from '../tools/types.js';
 import {
@@ -21,6 +23,7 @@ import {
 	type TerminalMouseEvent
 } from './mouse.js';
 import {Panel} from './Panel.js';
+import {TaskGraph} from './TaskGraph.js';
 
 type DashboardProps = {
 	agents?: AgentDefinition[];
@@ -38,7 +41,7 @@ type DashboardProps = {
 type ActivePanel = 'agents' | 'session' | 'inspector';
 type Modal = 'agent' | 'help' | 'settings' | null;
 type RunMode = 'single' | 'multi';
-type EntryKind = 'assistant' | 'error' | 'message' | 'preview' | 'steps' | 'system' | 'tool' | 'user';
+type EntryKind = 'assistant' | 'debate' | 'error' | 'message' | 'preview' | 'steps' | 'system' | 'tool' | 'user';
 
 type TranscriptEntry = {
 	id: number;
@@ -247,6 +250,10 @@ function entryColor(kind: EntryKind): string | undefined {
 		return 'white';
 	}
 
+	if (kind === 'debate') {
+		return 'magenta';
+	}
+
 	if (kind === 'error') {
 		return 'red';
 	}
@@ -346,6 +353,10 @@ function formatMultiAgentResult(result: MultiAgentRunResult): string {
 	return lines.join('\n');
 }
 
+function debateSource(message: DebateMessage): string {
+	return `${message.role.toUpperCase()} R${message.round}`;
+}
+
 export function Dashboard({
 	agents = [],
 	agentsError = null,
@@ -382,9 +393,12 @@ export function Dashboard({
 	const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
 	const [agentStatuses, setAgentStatuses] = useState<Record<string, AgentRuntimeStatus>>({});
 	const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
+	const [pendingPlan, setPendingPlan] = useState<MultiAgentPlan | null>(null);
 	const [spinnerIndex, setSpinnerIndex] = useState(0);
 	const conversationsRef = useRef<Record<string, ModelMessage[]>>({});
 	const multiStreamEntriesRef = useRef<Record<string, number>>({});
+	const planApprovalResolveRef = useRef<((plan: MultiAgentPlan) => void) | null>(null);
+	const currentMultiTaskRef = useRef<string>('');
 	const nextEntryIdRef = useRef(1);
 	const currentRunStepLabelsRef = useRef<string[]>([]);
 	const currentRunToolEntryIdsRef = useRef<Set<number>>(new Set());
@@ -519,7 +533,7 @@ export function Dashboard({
 		Math.max(0, transcript.length - transcriptHeight - scrollOffset),
 		Math.max(0, transcript.length - scrollOffset)
 	);
-	const status = isSetupMissing ? 'Setup needed' : pendingApproval !== null ? 'Approval needed' : isRunning ? 'Running' : agentConfigError !== null || isAgentsMissing ? 'Needs attention' : 'Ready';
+	const status = isSetupMissing ? 'Setup needed' : pendingApproval !== null ? 'Approval needed' : pendingPlan !== null ? 'Plan approval' : isRunning ? 'Running' : agentConfigError !== null || isAgentsMissing ? 'Needs attention' : 'Ready';
 	const spinnerFrame = spinnerFrames[spinnerIndex]!;
 	const selectedAgentName = selectedAgent?.name ?? 'agent';
 	const promptPlaceholder = canRun
@@ -645,6 +659,78 @@ export function Dashboard({
 		}
 	};
 
+	const handlePlanApproved = (plan: MultiAgentPlan): void => {
+		setPendingPlan(null);
+		appendEntry('system', `Plan approved - ${plan.steps.length} step(s) queued for execution.`);
+		planApprovalResolveRef.current?.(plan);
+		planApprovalResolveRef.current = null;
+	};
+
+	const handlePlanEdit = (stepId: string, newPrompt: string): void => {
+		setPendingPlan((plan) => plan === null ? null : {
+			...plan,
+			steps: plan.steps.map((step) => step.id === stepId ? {...step, prompt: newPrompt} : step)
+		});
+		appendEntry('system', `Edited ${stepId} before execution.`);
+	};
+
+	const handlePlanReplan = (reason: string): void => {
+		if (config === null || configuredAgents.length === 0) {
+			appendEntry('error', 'Cannot replan without configured agents.');
+			return;
+		}
+
+		const task = currentMultiTaskRef.current;
+		const previousPlan = pendingPlan;
+		setPendingPlan(null);
+		appendEntry('system', `Replanning requested: ${reason || 'No reason provided'}`);
+
+		void (async () => {
+			const plannerClient = llmClient ?? new AiSdkLlmClient();
+			let nextPlan = await planMultiAgentTaskDynamically({
+				config,
+				task: [
+					task,
+					`Previous plan was rejected. Reason: ${reason || 'No reason provided'}. Please generate a significantly different approach.`
+				].join('\n\n'),
+				agents: configuredAgents,
+				orchestrator: effectiveOrchestrator,
+				llmClient: plannerClient
+			});
+
+			if (nextPlan.steps.length > 1) {
+				appendEntry('system', 'Plan review starting - Advocate vs Skeptic');
+
+				try {
+					const outcome = await runAgentDebate({
+						plan: nextPlan,
+						task,
+						config,
+						llmClient: plannerClient,
+						agents: configuredAgents,
+						callbacks: {
+							onDebateMessage: (message) => {
+								appendEntry('debate', message.content, debateSource(message));
+							}
+						}
+					});
+					appendEntry('debate', outcome.summary, 'JUDGE');
+					appendEntry('system', outcome.modifications.length > 0
+						? `Plan updated - ${outcome.modifications.length} change(s) applied before execution`
+						: 'Plan approved - no changes needed');
+					nextPlan = applyModifications(nextPlan, outcome.modifications, configuredAgents);
+				} catch (error) {
+					appendEntry('error', `Plan review failed during replan: ${error instanceof Error ? error.message : String(error)}. Showing the replanned graph anyway.`);
+				}
+			}
+
+			setPendingPlan(nextPlan);
+		})().catch((error: unknown) => {
+			appendEntry('error', error instanceof Error ? error.message : String(error));
+			setPendingPlan(previousPlan);
+		});
+	};
+
 	const runSingleAgentPrompt = (message: string): void => {
 		if (!canRun || config === null || selectedAgent === undefined) {
 			appendEntry('error', `Polycode is not ready yet. Use [+] New agent or run ${COMMAND_NAME} init.`);
@@ -705,6 +791,8 @@ export function Dashboard({
 		beginRunSteps();
 		appendEntry('user', message);
 		appendEntry('system', `Starting ${effectiveOrchestrator.strategy} orchestration with ${configuredAgents.length} agent(s).`);
+		currentMultiTaskRef.current = message;
+		setPendingPlan(null);
 		multiStreamEntriesRef.current = {};
 		setAgentStatuses(Object.fromEntries(configuredAgents.map((agent) => [agent.name, 'idle'])));
 		setIsRunning(true);
@@ -717,6 +805,7 @@ export function Dashboard({
 			approvalMode,
 			webSearchProvider,
 			llmClient,
+			enableDebate: true,
 			toolContext: {
 				requestApproval: requestApprovalInUi,
 				onPreview: (preview) => {
@@ -726,6 +815,23 @@ export function Dashboard({
 			callbacks: {
 				onPlan: (plan) => {
 					appendEntry('system', `${formatPlanSummary(plan.steps)}\nsource: ${plan.source}`);
+					setPendingPlan(plan);
+					setActivePanel('session');
+					return new Promise<MultiAgentPlan>((resolve) => {
+						planApprovalResolveRef.current = resolve;
+					});
+				},
+				onDebateStart: () => {
+					appendEntry('system', 'Plan review starting - Advocate vs Skeptic');
+				},
+				onDebateMessage: (message) => {
+					appendEntry('debate', message.content, debateSource(message));
+				},
+				onDebateEnd: (outcome) => {
+					appendEntry('debate', outcome.summary, 'JUDGE');
+					appendEntry('system', outcome.modifications.length > 0
+						? `Plan updated - ${outcome.modifications.length} change(s) applied before execution`
+						: 'Plan approved - no changes needed');
 				},
 				onExecutionEvent: handleExecutionEvent,
 				onStepStart: (step) => {
@@ -747,6 +853,8 @@ export function Dashboard({
 			collapseRunSteps();
 			appendEntry('error', error instanceof Error ? error.message : String(error));
 		}).finally(() => {
+			setPendingPlan(null);
+			planApprovalResolveRef.current = null;
 			setIsRunning(false);
 		});
 	};
@@ -1047,6 +1155,10 @@ export function Dashboard({
 			return;
 		}
 
+		if (pendingPlan !== null) {
+			return;
+		}
+
 		if (inputValue.startsWith('/')) {
 			if (key.upArrow) {
 				setSlashIndex((index) => Math.max(index - 1, 0));
@@ -1191,7 +1303,15 @@ export function Dashboard({
 							<Text color="green">Use /create or click [+] New agent inside this UI.</Text>
 						</Box>
 					)}
-					{!isSetupMissing && !isAgentsMissing && transcript.length === 0 && (
+					{!isSetupMissing && !isAgentsMissing && pendingPlan !== null && (
+						<TaskGraph
+							plan={pendingPlan}
+							onApprove={handlePlanApproved}
+							onEdit={handlePlanEdit}
+							onReplan={handlePlanReplan}
+						/>
+					)}
+					{!isSetupMissing && !isAgentsMissing && pendingPlan === null && transcript.length === 0 && (
 						<Box flexDirection="column">
 							<Text bold>{runMode === 'multi' ? 'Ask the agent team anything.' : `Ask ${selectedAgentName} anything.`}</Text>
 							<Text dimColor>Try: read package.json and summarize this project</Text>
@@ -1199,7 +1319,7 @@ export function Dashboard({
 							<Text dimColor>Press / for searchable actions.</Text>
 						</Box>
 					)}
-					{visibleTranscript.map((entry) => (
+					{pendingPlan === null && visibleTranscript.map((entry) => (
 						<Box key={entry.id} flexDirection="column" marginBottom={1}>
 							<Text bold color={entryColor(entry.kind)}>{entryLabel(entry)}</Text>
 							<Text color={entryColor(entry.kind)}>{entry.text.length === 0 ? '...' : entry.text}</Text>

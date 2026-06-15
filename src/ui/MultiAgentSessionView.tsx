@@ -50,6 +50,10 @@ export function MultiAgentSessionView({interactive = true, session, version}: Mu
 	const sidebarWidth = Math.min(Math.max(Math.floor(columns * 0.23), 24), 34);
 	const rightWidth = Math.min(Math.max(Math.floor(columns * 0.28), 28), 42);
 	const latestMessages = session.messages.slice(-Math.max(panelHeight - 2, 4));
+	const debateLines = session.debateOutcome === undefined ? [] : [
+		...session.debateOutcome.rounds.map((message) => `${message.role} R${message.round}: ${message.content.slice(0, 80)}`),
+		`judge: ${session.debateOutcome.summary}`
+	];
 	const latestSteps = session.steps.slice(-Math.max(panelHeight - 2, 4));
 	const progress = `${session.steps.filter((step) => step.status === 'succeeded').length}/${session.plan.steps.length}`;
 
@@ -103,6 +107,11 @@ export function MultiAgentSessionView({interactive = true, session, version}: Mu
 					))}
 				</Panel>
 				<Panel title="Messages" width={rightWidth}>
+					{debateLines.slice(-Math.max(Math.floor(panelHeight / 2), 2)).map((line, index) => (
+						<Text key={`debate-${index}`} color="magenta">
+							{line}
+						</Text>
+					))}
 					{latestMessages.map((message) => (
 						<Text key={message.id} color={message.type === 'error' ? 'red' : 'gray'}>
 							{message.type}: {message.from} -&gt; {message.to}
