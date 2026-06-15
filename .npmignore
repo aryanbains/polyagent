@@ -1,0 +1,39 @@
+# Files that should NOT be published to npm.
+# Source files are kept in git but not shipped — only compiled output goes out.
+
+# Tests
+test/
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+**/*.spec.tsx
+vitest.config.ts
+
+# CI / dev tooling
+.github/
+.husky/
+.eslintrc*
+.prettierrc*
+.editorconfig
+
+# Source TypeScript (we ship compiled JS in dist/)
+src/
+tsconfig.json
+tsup.config.ts
+
+# Examples are kept in the repo but are not part of the npm package
+examples/
+
+# Docs that live at the repo root only
+CHANGELOG.md
+LICENSE
+
+# Local artifacts
+.tmp/
+*.log
+*.tsbuildinfo
+
+# Allow README and the compiled dist output
+!dist/
+!README.md
+!LICENSE

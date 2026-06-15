@@ -4,7 +4,7 @@ import path from 'node:path';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {AgentDefinition, OrchestratorConfig} from '../src/agents/schema.js';
 import type {LlmClient, LlmStreamOptions} from '../src/chat/run.js';
-import type {PolycodeConfig} from '../src/domain.js';
+import type {PolyagentConfig} from '../src/domain.js';
 import {applyModifications, runAgentDebate, type PlanModification} from '../src/orchestration/debate.js';
 import type {MultiAgentPlan, MultiAgentPlanStep} from '../src/orchestration/planner.js';
 import {runMultiAgentTask} from '../src/orchestration/run.js';
@@ -22,7 +22,7 @@ const orchestrator: OrchestratorConfig = {
 	max_iterations: 10
 };
 
-function config(): PolycodeConfig {
+function config(): PolyagentConfig {
 	return {
 		version: 1,
 		project: {
@@ -96,7 +96,7 @@ class DebateLlmClient implements LlmClient {
 }
 
 beforeEach(async () => {
-	workspace = await mkdtemp(path.join(os.tmpdir(), 'polycode-debate-'));
+	workspace = await mkdtemp(path.join(os.tmpdir(), 'polyagent-debate-'));
 });
 
 afterEach(async () => {

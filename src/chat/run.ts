@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {stepCountIs, streamText, type ModelMessage, type ToolSet} from 'ai';
 import type {AgentDefinition} from '../agents/schema.js';
-import type {PolycodeConfig} from '../domain.js';
+import type {PolyagentConfig} from '../domain.js';
 import {createLanguageModel} from '../llm/providers.js';
 import {createMemoryStore} from '../memory/factory.js';
 import type {MemoryStore} from '../memory/types.js';
@@ -20,7 +20,7 @@ import {
 import {buildSystemPrompt} from './system-prompt.js';
 
 export type LlmStreamOptions = {
-	config: PolycodeConfig;
+	config: PolyagentConfig;
 	agent: AgentDefinition;
 	messages: ModelMessage[];
 	system: string;
@@ -53,7 +53,7 @@ function toLlmCallError(error: unknown): Error {
 	const message = error instanceof Error ? error.message : String(error);
 
 	if (/api key|authentication|unauthorized|401/i.test(message)) {
-		return new LlmCallError('LLM request failed: authentication failed. Check your API key with polycode init.');
+		return new LlmCallError('LLM request failed: authentication failed. Check your API key with polyagent init.');
 	}
 
 	if (/rate limit|429|quota/i.test(message)) {
@@ -75,8 +75,8 @@ export class AiSdkLlmClient implements LlmClient {
 	async *streamText(options: LlmStreamOptions): AsyncIterable<string> {
 		throwIfAborted(options.abortSignal);
 
-		if (process.env.POLYCODE_MOCK_LLM_RESPONSE !== undefined) {
-			yield process.env.POLYCODE_MOCK_LLM_RESPONSE;
+		if (process.env.POLYAGENT_MOCK_LLM_RESPONSE !== undefined) {
+			yield process.env.POLYAGENT_MOCK_LLM_RESPONSE;
 			return;
 		}
 
@@ -107,7 +107,7 @@ export class AiSdkLlmClient implements LlmClient {
 }
 
 export type RunAgentTurnOptions = {
-	config: PolycodeConfig;
+	config: PolyagentConfig;
 	agent: AgentDefinition;
 	message: string;
 	conversation?: ModelMessage[];

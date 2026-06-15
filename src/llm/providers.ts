@@ -4,7 +4,7 @@ import {createGroq} from '@ai-sdk/groq';
 import {createOpenAI} from '@ai-sdk/openai';
 import {createOpenAICompatible} from '@ai-sdk/openai-compatible';
 import type {AgentDefinition} from '../agents/schema.js';
-import type {PolycodeConfig, Provider} from '../domain.js';
+import type {PolyagentConfig, Provider} from '../domain.js';
 import {getConfigApiKey} from '../config/store.js';
 
 const DEFAULT_MODELS: Record<Provider, string> = {
@@ -22,12 +22,12 @@ export class ProviderConfigurationError extends Error {
 	}
 }
 
-export function createLanguageModel(config: PolycodeConfig, agent: AgentDefinition): LanguageModel {
+export function createLanguageModel(config: PolyagentConfig, agent: AgentDefinition): LanguageModel {
 	const model = agent.model ?? DEFAULT_MODELS[config.llm.provider];
 	const apiKey = getConfigApiKey(config);
 
 	if (config.llm.provider !== 'ollama' && apiKey.length === 0) {
-		throw new ProviderConfigurationError(`No API key configured for ${config.llm.provider}. Run polycode init to reconfigure.`);
+		throw new ProviderConfigurationError(`No API key configured for ${config.llm.provider}. Run polyagent init to reconfigure.`);
 	}
 
 	if (config.llm.provider === 'openai') {
@@ -48,8 +48,8 @@ export function createLanguageModel(config: PolycodeConfig, agent: AgentDefiniti
 			baseURL: process.env.OPENROUTER_BASE_URL ?? 'https://openrouter.ai/api/v1',
 			apiKey,
 			headers: {
-				'HTTP-Referer': process.env.OPENROUTER_HTTP_REFERER ?? 'https://github.com/polycode',
-				'X-Title': process.env.OPENROUTER_APP_NAME ?? 'Polycode'
+				'HTTP-Referer': process.env.OPENROUTER_HTTP_REFERER ?? 'https://polyagent.dev',
+				'X-Title': process.env.OPENROUTER_APP_NAME ?? 'Polyagent'
 			}
 		})(model);
 	}

@@ -33,14 +33,14 @@ function runCli(args: string[], env: NodeJS.ProcessEnv = {}): Promise<{stdout: s
 }
 
 beforeEach(async () => {
-	temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'polycode-e2e-'));
+	temporaryRoot = await mkdtemp(path.join(os.tmpdir(), 'polyagent-e2e-'));
 });
 
 afterEach(async () => {
 	await rm(temporaryRoot, {force: true, recursive: true});
 });
 
-describe('polycode cli', () => {
+describe('polyagent cli', () => {
 	it('prints the package version', async () => {
 		const result = await runCli(['--version']);
 
@@ -66,19 +66,19 @@ describe('polycode cli', () => {
 			'--memory',
 			'skip'
 		], {
-			POLYCODE_HOME: home
+			POLYAGENT_HOME: home
 		});
 
 		const rawConfig = await readFile(path.join(home, 'config.json'), 'utf8');
 		const starterAgents = await readFile(path.join(workspace, 'agents.yaml'), 'utf8');
 		const validateResult = await runCli(['validate'], {
-			POLYCODE_HOME: home
+			POLYAGENT_HOME: home
 		});
 
 		expect(result.exitCode).toBe(0);
-		expect(result.stdout).toContain('Polycode configured.');
+		expect(result.stdout).toContain('Polyagent configured.');
 		expect(result.stdout).toContain('Agents: Created');
-		expect(result.stdout).toContain('polycode validate');
+		expect(result.stdout).toContain('polyagent validate');
 		expect(result.stdout).not.toContain(secret);
 		expect(result.stderr).not.toContain(secret);
 		expect(rawConfig).not.toContain(secret);
@@ -105,7 +105,7 @@ describe('polycode cli', () => {
 			'--memory',
 			'chroma'
 		], {
-			POLYCODE_HOME: home
+			POLYAGENT_HOME: home
 		});
 		await writeFile(path.join(workspace, 'agents.yaml'), [
 			'agents:',
@@ -117,18 +117,18 @@ describe('polycode cli', () => {
 		].join('\n'));
 
 		const validateResult = await runCli(['validate'], {
-			POLYCODE_HOME: home
+			POLYAGENT_HOME: home
 		});
 		const chatResult = await runCli(['chat', 'researcher', '--message', 'remember Vitest'], {
-			POLYCODE_HOME: home,
-			POLYCODE_EMBEDDINGS: 'hash',
-			POLYCODE_MEMORY_DRIVER: 'local',
-			POLYCODE_MOCK_LLM_RESPONSE: 'Vitest remembered.'
+			POLYAGENT_HOME: home,
+			POLYAGENT_EMBEDDINGS: 'hash',
+			POLYAGENT_MEMORY_DRIVER: 'local',
+			POLYAGENT_MOCK_LLM_RESPONSE: 'Vitest remembered.'
 		});
 		const memoryResult = await runCli(['memory'], {
-			POLYCODE_HOME: home,
-			POLYCODE_EMBEDDINGS: 'hash',
-			POLYCODE_MEMORY_DRIVER: 'local'
+			POLYAGENT_HOME: home,
+			POLYAGENT_EMBEDDINGS: 'hash',
+			POLYAGENT_MEMORY_DRIVER: 'local'
 		});
 
 		expect(validateResult.exitCode).toBe(0);
@@ -156,7 +156,7 @@ describe('polycode cli', () => {
 			'--memory',
 			'skip'
 		], {
-			POLYCODE_HOME: home
+			POLYAGENT_HOME: home
 		});
 		await writeFile(path.join(workspace, 'agents.yaml'), [
 			'agents:',
@@ -165,7 +165,7 @@ describe('polycode cli', () => {
 		].join('\n'));
 
 		const result = await runCli(['validate'], {
-			POLYCODE_HOME: home
+			POLYAGENT_HOME: home
 		});
 
 		expect(result.exitCode).toBe(1);
@@ -189,7 +189,7 @@ describe('polycode cli', () => {
 			'--memory',
 			'chroma'
 		], {
-			POLYCODE_HOME: home
+			POLYAGENT_HOME: home
 		});
 		await writeFile(path.join(workspace, 'agents.yaml'), [
 			'agents:',
@@ -200,9 +200,9 @@ describe('polycode cli', () => {
 
 		const result = await runCli(['chat', 'researcher', '--message', 'hello'], {
 			CHROMA_PORT: '65530',
-			POLYCODE_HOME: home,
-			POLYCODE_EMBEDDINGS: 'hash',
-			POLYCODE_MOCK_LLM_RESPONSE: 'hello'
+			POLYAGENT_HOME: home,
+			POLYAGENT_EMBEDDINGS: 'hash',
+			POLYAGENT_MOCK_LLM_RESPONSE: 'hello'
 		});
 
 		expect(result.exitCode).toBe(1);
@@ -226,7 +226,7 @@ describe('polycode cli', () => {
 			'--memory',
 			'skip'
 		], {
-			POLYCODE_HOME: home
+			POLYAGENT_HOME: home
 		});
 		await writeFile(path.join(workspace, 'agents.yaml'), [
 			'agents:',
@@ -237,11 +237,11 @@ describe('polycode cli', () => {
 		].join('\n'));
 
 		const chatResult = await runCli(['chat', 'researcher', '--message', 'hello'], {
-			POLYCODE_HOME: home,
-			POLYCODE_MOCK_LLM_RESPONSE: 'skip memory works'
+			POLYAGENT_HOME: home,
+			POLYAGENT_MOCK_LLM_RESPONSE: 'skip memory works'
 		});
 		const memoryResult = await runCli(['memory'], {
-			POLYCODE_HOME: home
+			POLYAGENT_HOME: home
 		});
 
 		expect(chatResult.exitCode).toBe(0);
@@ -268,7 +268,7 @@ describe('polycode cli', () => {
 			'--memory',
 			'skip'
 		], {
-			POLYCODE_HOME: home
+			POLYAGENT_HOME: home
 		});
 		await writeFile(path.join(workspace, 'agents.yaml'), [
 			'agents:',
@@ -279,8 +279,8 @@ describe('polycode cli', () => {
 		].join('\n'));
 
 		const result = await runCli(['run', 'read package.json'], {
-			POLYCODE_HOME: home,
-			POLYCODE_MOCK_LLM_RESPONSE: 'package.json read'
+			POLYAGENT_HOME: home,
+			POLYAGENT_MOCK_LLM_RESPONSE: 'package.json read'
 		});
 
 		expect(result.exitCode).toBe(0);
@@ -304,7 +304,7 @@ describe('polycode cli', () => {
 			'--memory',
 			'skip'
 		], {
-			POLYCODE_HOME: home
+			POLYAGENT_HOME: home
 		});
 
 		const runResult = await runCli([
@@ -313,13 +313,13 @@ describe('polycode cli', () => {
 			'--yes',
 			'Research the top 5 JavaScript testing frameworks in 2024, compare their features, and create a markdown report at ./reports/testing-frameworks.md'
 		], {
-			POLYCODE_HOME: home,
-			POLYCODE_MOCK_LLM_RESPONSE: 'multi agent output'
+			POLYAGENT_HOME: home,
+			POLYAGENT_MOCK_LLM_RESPONSE: 'multi agent output'
 		});
 		const report = await readFile(path.join(workspace, 'reports', 'testing-frameworks.md'), 'utf8');
 		const sessionMatch = /Session: (.+\.json)/.exec(runResult.stdout);
 		const replayResult = await runCli(['replay', sessionMatch?.[1] ?? '', '--speed', '10'], {
-			POLYCODE_HOME: home
+			POLYAGENT_HOME: home
 		});
 
 		expect(runResult.exitCode).toBe(0);
@@ -328,7 +328,7 @@ describe('polycode cli', () => {
 		expect(runResult.stdout).toContain('Session:');
 		expect(report).toContain('JavaScript testing frameworks');
 		expect(replayResult.exitCode).toBe(0);
-		expect(replayResult.stdout).toContain('Polycode replay');
+		expect(replayResult.stdout).toContain('Polyagent replay');
 		expect(replayResult.stdout).toContain('Replay complete: success');
 	});
 });

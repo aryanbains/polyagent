@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
 import type {AgentDefinition, OrchestratorConfig} from '../agents/schema.js';
-import type {PolycodeConfig} from '../domain.js';
+import type {PolyagentConfig} from '../domain.js';
 import type {LlmClient} from '../chat/run.js';
 import {isRunCancelled, throwIfAborted} from '../runtime/cancellation.js';
 import type {PlannerDescriptor} from '../runtime/orchestration.js';
@@ -39,7 +39,7 @@ const DynamicPlanSchema = z.object({
 }).strict();
 
 export type DynamicPlanOptions = {
-	config: PolycodeConfig;
+	config: PolyagentConfig;
 	task: string;
 	agents: AgentDefinition[];
 	orchestrator: OrchestratorConfig;
@@ -151,11 +151,59 @@ function extractJsonObject(value: string): unknown {
 	return JSON.parse(raw.slice(start, end + 1));
 }
 
+/**
+ * ReAct (Reason + Act) strategy: a single primary agent runs an iterative
+ * Thought -> Action -> Observation loop using its tools and (optionally) the
+ * `message_agent` tool to consult specialists. The agent's native tool-calling
+ * loop (Vercel AI SDK) is the implementation of the inner loop. We express
+ * that loop as one plan step with a strong ReAct system prompt, and we set
+ * the strategy source to `static` so callers know the plan was synthesized
+ * deterministically rather than by the LLM dynamic planner.
+ */
+export function planReActTask(task: string, agents: AgentDefinition[], orchestrator: OrchestratorConfig): MultiAgentPlan {
+	const id = randomUUID();
+	const primary = chooseAgent(agents, [/assistant/, /helper/, /main/, /general/, /react/, /agent/], 0);
+	const specialistHint = agents.length > 1
+		? `\n\nYou may consult the following specialist agents mid-loop using the message_agent tool when you need their context: ${agents.filter((agent) => agent.name !== primary.name).map((agent) => `${agent.name} (${agent.role})`).join(', ')}.`
+		: '';
+	const prompt = [
+		'Solve the following task using a Reason + Act (ReAct) loop: think step by step, then either call a tool, consult another agent, or return your final answer.',
+		'Keep your reasoning concise. After each tool or agent result, briefly state what you observed and what you will do next.',
+		'Stop only when you have a complete, final answer for the user. Do not loop forever.',
+		'',
+		`Task: ${task}${specialistHint}`
+	].join('\n');
+
+	const steps: MultiAgentPlanStep[] = [
+		{
+			id: 'react',
+			title: 'ReAct: reason and act on the task',
+			agentName: primary.name,
+			prompt,
+			dependsOn: [],
+			status: 'pending'
+		}
+	];
+
+	return {
+		id,
+		task,
+		strategy: orchestrator.strategy,
+		steps,
+		createdAt: new Date().toISOString(),
+		source: 'static'
+	};
+}
+
 export function planMultiAgentTask(task: string, agents: AgentDefinition[], orchestrator: OrchestratorConfig): MultiAgentPlan {
 	const id = randomUUID();
 
 	if (agents.length === 0) {
-		throw new Error('No agents are configured. Create agents.yaml and run polycode validate.');
+		throw new Error('No agents are configured. Create agents.yaml and run polyagent validate.');
+	}
+
+	if (orchestrator.strategy === 'react') {
+		return planReActTask(task, agents, orchestrator);
 	}
 
 	const researcher = chooseAgent(agents, [/research/, /search/, /source/, /gather/], 0);
@@ -216,7 +264,7 @@ export async function planMultiAgentTaskDynamically(options: DynamicPlanOptions)
 	throwIfAborted(options.abortSignal);
 
 	if (options.agents.length === 0) {
-		throw new Error('No agents are configured. Create agents.yaml and run polycode validate.');
+		throw new Error('No agents are configured. Create agents.yaml and run polyagent validate.');
 	}
 
 	if (options.orchestrator.strategy !== 'dynamic' || options.llmClient === undefined) {
@@ -248,7 +296,7 @@ export async function planMultiAgentTaskDynamically(options: DynamicPlanOptions)
 			config: options.config,
 			agent: orchestratorAgent,
 			messages,
-			system: 'You are Polycode dynamic planner. Produce valid JSON only. Do not write markdown or commentary.',
+			system: 'You are Polyagent dynamic planner. Produce valid JSON only. Do not write markdown or commentary.',
 			abortSignal: options.abortSignal
 		})) {
 			throwIfAborted(options.abortSignal);

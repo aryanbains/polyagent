@@ -1,0 +1,7 @@
+{
+	"name": "polyagent-single-agent",
+	"version": "0.1.0",
+	"description": "Minimal single-agent setup using the ReAct strategy.",
+	"type": "module",
+	"private": true
+}

@@ -90,7 +90,7 @@ export function InitWizard(): JSX.Element {
 		<Box flexDirection="column" paddingX={1}>
 			<Text bold color="cyan">{APP_NAME} onboarding</Text>
 			<Box marginTop={1} flexDirection="column">
-				<Text dimColor>Configuration is stored in your Polycode home directory.</Text>
+				<Text dimColor>Configuration is stored in your Polyagent home directory.</Text>
 				<Text dimColor>Your API key is masked in the terminal and encrypted before it is written.</Text>
 			</Box>
 

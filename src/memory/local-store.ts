@@ -33,7 +33,7 @@ export class LocalVectorMemoryStore implements MemoryStore {
 	) {}
 
 	static forProject(workingDirectory: string): LocalVectorMemoryStore {
-		return new LocalVectorMemoryStore(path.join(workingDirectory, '.polycode', 'memory.json'));
+		return new LocalVectorMemoryStore(path.join(workingDirectory, '.polyagent', 'memory.json'));
 	}
 
 	async add(agentName: string, content: string): Promise<void> {

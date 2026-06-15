@@ -8,7 +8,7 @@ import {createAgentMessageBus} from '../src/orchestration/message-bus.js';
 import {runMultiAgentTask} from '../src/orchestration/run.js';
 import {loadRecordedSession} from '../src/orchestration/session-recorder.js';
 import type {LlmClient, LlmStreamOptions} from '../src/chat/run.js';
-import type {PolycodeConfig} from '../src/domain.js';
+import type {PolyagentConfig} from '../src/domain.js';
 import {ApprovalRequestQueue} from '../src/ui/approval-queue.js';
 
 let workspace = '';
@@ -43,7 +43,7 @@ const orchestrator: OrchestratorConfig = {
 	max_iterations: 10
 };
 
-function config(): PolycodeConfig {
+function config(): PolyagentConfig {
 	return {
 		version: 1,
 		project: {
@@ -157,7 +157,7 @@ class ReassigningLlmClient implements LlmClient {
 }
 
 beforeEach(async () => {
-	workspace = await mkdtemp(path.join(os.tmpdir(), 'polycode-orchestration-'));
+	workspace = await mkdtemp(path.join(os.tmpdir(), 'polyagent-orchestration-'));
 });
 
 afterEach(async () => {

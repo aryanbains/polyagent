@@ -72,7 +72,7 @@ function getFetch(context?: ToolContext): typeof fetch {
 }
 
 function webTimeoutMs(): number {
-	const value = Number.parseInt(process.env.POLYCODE_WEB_TIMEOUT_MS ?? '', 10);
+	const value = Number.parseInt(process.env.POLYAGENT_WEB_TIMEOUT_MS ?? '', 10);
 
 	if (Number.isFinite(value) && value > 0) {
 		return Math.min(value, 120_000);
@@ -116,7 +116,7 @@ async function fetchWithTimeout(context: ToolContext, input: URL, init: RequestI
 }
 
 function resolveWebSearchProvider(context: ToolContext): WebSearchProvider {
-	const value = process.env.POLYCODE_WEB_SEARCH_PROVIDER?.toLowerCase();
+	const value = process.env.POLYAGENT_WEB_SEARCH_PROVIDER?.toLowerCase();
 
 	if (value === 'tavily' || value === 'duckduckgo' || value === 'auto') {
 		return value;
@@ -220,7 +220,7 @@ async function duckDuckGoHtmlSearch(query: string, maxResults: number, context: 
 		response = await fetchWithTimeout(context, url, {
 			headers: {
 				'Accept': 'text/html,application/xhtml+xml',
-				'User-Agent': 'Mozilla/5.0 Polycode/0.1'
+				'User-Agent': 'Mozilla/5.0 Polyagent/0.1'
 			}
 		});
 	} catch (error) {
@@ -601,8 +601,8 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 			}),
 			async execute(input, context) {
 				throwIfAborted(context.abortSignal);
-				if (process.env.POLYCODE_MOCK_WEB_SEARCH !== undefined) {
-					return {ok: true, message: process.env.POLYCODE_MOCK_WEB_SEARCH};
+				if (process.env.POLYAGENT_MOCK_WEB_SEARCH !== undefined) {
+					return {ok: true, message: process.env.POLYAGENT_MOCK_WEB_SEARCH};
 				}
 
 				const normalized = normalizeCurrentFactSearchQuery(input.query);
@@ -646,7 +646,7 @@ export function getBuiltInToolDefinitions(): ToolDefinition[] {
 				try {
 					response = await fetchWithTimeout(context, url, {
 						headers: {
-							'User-Agent': 'Polycode/0.1'
+							'User-Agent': 'Polyagent/0.1'
 						}
 					});
 				} catch (error) {

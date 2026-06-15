@@ -1,6 +1,6 @@
-export const APP_NAME = 'Polycode';
-export const COMMAND_NAME = 'polycode';
-export const CONFIG_DIRECTORY_NAME = '.polycode';
+export const APP_NAME = 'Polyagent';
+export const COMMAND_NAME = 'polyagent';
+export const CONFIG_DIRECTORY_NAME = '.polyagent';
 export const CONFIG_FILE_NAME = 'config.json';
 
 export const PROVIDERS = ['openai', 'anthropic', 'groq', 'ollama', 'openrouter'] as const;
@@ -17,7 +17,7 @@ export type EncryptedSecret = {
 	ciphertext: string;
 };
 
-export type PolycodeConfig = {
+export type PolyagentConfig = {
 	version: 1;
 	project: {
 		name: string;

@@ -1,7 +1,7 @@
 import {describe, expect, it} from 'vitest';
 import type {AgentDefinition} from '../src/agents/schema.js';
 import {encryptSecret} from '../src/config/crypto.js';
-import type {PolycodeConfig} from '../src/domain.js';
+import type {PolyagentConfig} from '../src/domain.js';
 import {createLanguageModel} from '../src/llm/providers.js';
 
 const agent: AgentDefinition = {
@@ -15,7 +15,7 @@ const agent: AgentDefinition = {
 
 describe('createLanguageModel', () => {
 	it('creates an OpenRouter model through the OpenAI-compatible adapter', () => {
-		const config: PolycodeConfig = {
+		const config: PolyagentConfig = {
 			version: 1,
 			project: {
 				name: 'Demo',

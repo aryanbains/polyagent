@@ -89,7 +89,7 @@ export function findAgent(agents: AgentDefinition[], name: string): AgentDefinit
 	const agent = agents.find((candidate) => candidate.name === name);
 
 	if (agent === undefined) {
-		throw new AgentConfigError(`Agent "${name}" was not found. Run polycode validate to see configured agents.`);
+		throw new AgentConfigError(`Agent "${name}" was not found. Run polyagent validate to see configured agents.`);
 	}
 
 	return agent;

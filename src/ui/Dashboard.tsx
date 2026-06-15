@@ -6,7 +6,7 @@ import type {ModelMessage} from 'ai';
 import type {AgentDefinition, OrchestratorConfig} from '../agents/schema.js';
 import {loadAgents} from '../agents/load.js';
 import {saveAgentsFile, upsertAgentDefinition} from '../agents/manage.js';
-import {APP_NAME, COMMAND_NAME, type PolycodeConfig} from '../domain.js';
+import {APP_NAME, COMMAND_NAME, type PolyagentConfig} from '../domain.js';
 import type {MemoryStats} from '../memory/types.js';
 import {getConfigPath} from '../config/store.js';
 import {AiSdkLlmClient, runAgentTurn, type LlmClient} from '../chat/run.js';
@@ -26,11 +26,14 @@ import {
 import {ApprovalRequestQueue, type QueuedApproval} from './approval-queue.js';
 import {Panel} from './Panel.js';
 import {TaskGraph} from './TaskGraph.js';
+import {mentionCompletions} from './prompt-completions.js';
+import {fileCompletions} from './prompt-files.js';
+import {PromptHistory} from './prompt-history.js';
 
 type DashboardProps = {
 	agents?: AgentDefinition[];
 	agentsError?: string | null;
-	config: PolycodeConfig | null;
+	config: PolyagentConfig | null;
 	initialInputValue?: string;
 	initialModal?: Modal;
 	interactive?: boolean;
@@ -401,6 +404,8 @@ export function Dashboard({
 	const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
 	const [pendingPlan, setPendingPlan] = useState<MultiAgentPlan | null>(null);
 	const [spinnerIndex, setSpinnerIndex] = useState(0);
+	const [completionIndex, setCompletionIndex] = useState(0);
+	const promptHistoryRef = useRef<PromptHistory>(new PromptHistory());
 	const approvalQueueRef = useRef(new ApprovalRequestQueue());
 	const conversationsRef = useRef<Record<string, ModelMessage[]>>({});
 	const multiStreamEntriesRef = useRef<Record<string, number>>({});
@@ -464,6 +469,14 @@ export function Dashboard({
 			process.stdout.write(disableMouseTrackingSequence);
 		};
 	}, [inputEnabled]);
+
+	useEffect(() => {
+		if (config === null) {
+			return;
+		}
+
+		void promptHistoryRef.current.loadFromFile(path.join(config.project.workingDirectory, '.polyagent', 'history'));
+	}, [config]);
 
 	const appendEntry = (kind: EntryKind, text: string, source?: string): number => {
 		const id = nextEntryIdRef.current;
@@ -808,7 +821,7 @@ export function Dashboard({
 
 	const runSingleAgentPrompt = (message: string): void => {
 		if (!canRun || config === null || selectedAgent === undefined) {
-			appendEntry('error', `Polycode is not ready yet. Use [+] New agent or run ${COMMAND_NAME} init.`);
+			appendEntry('error', `Polyagent is not ready yet. Use [+] New agent or run ${COMMAND_NAME} init.`);
 			return;
 		}
 
@@ -973,6 +986,12 @@ export function Dashboard({
 			return;
 		}
 
+		const pushed = promptHistoryRef.current.push(message);
+
+		if (pushed && config !== null) {
+			void promptHistoryRef.current.append(path.join(config.project.workingDirectory, '.polyagent', 'history'), config.project.workingDirectory, message);
+		}
+
 		if (runMode === 'multi') {
 			runMultiAgentPrompt(message);
 			return;
@@ -1067,7 +1086,7 @@ export function Dashboard({
 		{
 			id: 'exit',
 			title: 'Exit',
-			detail: 'Close Polycode.',
+			detail: 'Close Polyagent.',
 			search: 'exit quit',
 			run: exit
 		}
@@ -1083,6 +1102,44 @@ export function Dashboard({
 	useEffect(() => {
 		setSlashIndex((index) => Math.min(index, Math.max(slashSuggestions.length - 1, 0)));
 	}, [slashSuggestions.length]);
+
+	const agentNames = configuredAgents.map((agent) => agent.name);
+	const mentionCompletionList = inputValue.length > 0 && !inputValue.startsWith('/')
+		? mentionCompletions({value: inputValue, cursor: inputValue.length, agents: agentNames})
+		: [];
+	const fileCompletionList = inputValue.length > 0 && !inputValue.startsWith('/') && config !== null
+		? fileCompletions({value: inputValue, cursor: inputValue.length, root: config.project.workingDirectory, limit: 8})
+		: [];
+	const promptCompletions: Array<{label: string; apply: () => void; hint: string}> = [
+		...mentionCompletionList.map((completion) => ({
+			label: completion.label,
+			hint: 'agent',
+			apply: () => {
+				const replacement = completion.value === 'all' ? '@all ' : `@${completion.value} `;
+				setInputValue(`${inputValue.slice(0, completion.start)}${replacement}`);
+			}
+		})),
+		...fileCompletionList.map((completion) => ({
+			label: completion.label,
+			hint: completion.kind === 'directory' ? 'dir' : 'file',
+			apply: () => {
+				setInputValue(`${inputValue.slice(0, completion.start)}${completion.value}`);
+			}
+		}))
+	];
+
+	useEffect(() => {
+		setCompletionIndex(0);
+	}, [inputValue]);
+
+	const acceptTopCompletion = (): boolean => {
+		const top = promptCompletions[completionIndex] ?? promptCompletions[0];
+		if (top === undefined) {
+			return false;
+		}
+		top.apply();
+		return true;
+	};
 
 	const settingsRows = [
 		{
@@ -1287,6 +1344,28 @@ export function Dashboard({
 			return;
 		}
 
+		if (!inputValue.startsWith('/') && promptCompletions.length > 0 && key.tab) {
+			if (acceptTopCompletion()) {
+				return;
+			}
+		}
+
+		if (!inputValue.startsWith('/') && key.upArrow) {
+			const previous = promptHistoryRef.current.previous(inputValue);
+			if (previous !== null) {
+				setInputValue(previous);
+				return;
+			}
+		}
+
+		if (!inputValue.startsWith('/') && key.downArrow && promptHistoryRef.current.position !== null) {
+			const next = promptHistoryRef.current.next();
+			if (next !== null) {
+				setInputValue(next);
+				return;
+			}
+		}
+
 		if (inputValue.length === 0) {
 			if (key.upArrow) {
 				setSelectedAgentIndex((index) => Math.max(index - 1, 0));
@@ -1396,7 +1475,7 @@ export function Dashboard({
 				>
 					{isSetupMissing && (
 						<Box flexDirection="column">
-							<Text bold>Polycode needs setup</Text>
+							<Text bold>Polyagent needs setup</Text>
 							<Text color="cyan">{COMMAND_NAME} init</Text>
 							<Text dimColor>Config path checked: {getConfigPath()}</Text>
 						</Box>
@@ -1541,6 +1620,16 @@ export function Dashboard({
 			)}
 
 			<Box flexDirection="column" paddingX={1}>
+				{promptCompletions.length > 0 && !inputValue.startsWith('/') && (
+					<Box borderStyle="single" borderColor="green" paddingX={1} flexDirection="column" marginBottom={1}>
+						<Text color="green" bold>Completions (Tab to apply)</Text>
+						{promptCompletions.slice(0, 6).map((completion, index) => (
+							<Text key={`${completion.label}-${index}`} color={index === completionIndex ? 'black' : undefined} backgroundColor={index === completionIndex ? 'green' : undefined}>
+								{index === completionIndex ? '>' : ' '} {completion.label} <Text dimColor>({completion.hint})</Text>
+							</Text>
+						))}
+					</Box>
+				)}
 				{pendingApproval !== null && (
 					<Box borderStyle="round" borderColor="yellow" paddingX={1} flexDirection="column">
 						<Text color="yellow" bold>Tool approval required{approvalQueueSize > 0 ? ` (${approvalQueueSize} queued)` : ''}</Text>

@@ -8,7 +8,7 @@ import {LocalVectorMemoryStore} from '../src/memory/local-store.js';
 let temporaryDirectory = '';
 
 beforeEach(async () => {
-	temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'polycode-memory-'));
+	temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'polyagent-memory-'));
 });
 
 afterEach(async () => {
@@ -17,7 +17,7 @@ afterEach(async () => {
 
 describe('LocalVectorMemoryStore', () => {
 	it('stores and retrieves similar memories by agent', async () => {
-		const store = new LocalVectorMemoryStore(path.join(temporaryDirectory, '.polycode', 'memory.json'), new HashEmbedder());
+		const store = new LocalVectorMemoryStore(path.join(temporaryDirectory, '.polyagent', 'memory.json'), new HashEmbedder());
 
 		await store.add('researcher', 'User asked about TypeScript testing frameworks.');
 		await store.add('writer', 'User asked for a landing page draft.');
@@ -30,16 +30,16 @@ describe('LocalVectorMemoryStore', () => {
 	});
 
 	it('defaults to semantic embeddings with hash fallback', () => {
-		const originalMode = process.env.POLYCODE_EMBEDDINGS;
-		delete process.env.POLYCODE_EMBEDDINGS;
+		const originalMode = process.env.POLYAGENT_EMBEDDINGS;
+		delete process.env.POLYAGENT_EMBEDDINGS;
 
 		try {
 			expect(createEmbedder()).toBeInstanceOf(FallbackEmbedder);
 		} finally {
 			if (originalMode === undefined) {
-				delete process.env.POLYCODE_EMBEDDINGS;
+				delete process.env.POLYAGENT_EMBEDDINGS;
 			} else {
-				process.env.POLYCODE_EMBEDDINGS = originalMode;
+				process.env.POLYAGENT_EMBEDDINGS = originalMode;
 			}
 		}
 	});

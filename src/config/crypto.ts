@@ -12,7 +12,7 @@ function deriveLocalKey(): Buffer {
 		os.arch()
 	].join(':');
 
-	return crypto.createHash('sha256').update(`polycode:${identity}`).digest();
+	return crypto.createHash('sha256').update(`polyagent:${identity}`).digest();
 }
 
 export function encryptSecret(secret: string): EncryptedSecret | null {

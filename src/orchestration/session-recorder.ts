@@ -41,7 +41,7 @@ export type RecordedSession = {
 };
 
 export function getSessionsDirectory(workingDirectory: string): string {
-	return path.join(workingDirectory, '.polycode', 'sessions');
+	return path.join(workingDirectory, '.polyagent', 'sessions');
 }
 
 export function createSessionId(date = new Date()): string {

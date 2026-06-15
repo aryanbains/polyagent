@@ -2,25 +2,25 @@ import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {scaffoldAgentsFile, type ScaffoldAgentsResult} from '../agents/scaffold.js';
-import {CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME, type InitOptions, type PolycodeConfig} from '../domain.js';
+import {CONFIG_DIRECTORY_NAME, CONFIG_FILE_NAME, type InitOptions, type PolyagentConfig} from '../domain.js';
 import {decryptSecret, encryptSecret} from './crypto.js';
 
 export class ConfigDecryptionError extends Error {
 	constructor() {
-		super('API key could not be decrypted. Run polycode init to reconfigure.');
+		super('API key could not be decrypted. Run polyagent init to reconfigure.');
 		this.name = 'ConfigDecryptionError';
 	}
 }
 
-export function getPolycodeHome(): string {
-	return process.env.POLYCODE_HOME ?? path.join(os.homedir(), CONFIG_DIRECTORY_NAME);
+export function getPolyagentHome(): string {
+	return process.env.POLYAGENT_HOME ?? path.join(os.homedir(), CONFIG_DIRECTORY_NAME);
 }
 
 export function getConfigPath(): string {
-	return path.join(getPolycodeHome(), CONFIG_FILE_NAME);
+	return path.join(getPolyagentHome(), CONFIG_FILE_NAME);
 }
 
-export async function createConfig(options: InitOptions): Promise<PolycodeConfig> {
+export async function createConfig(options: InitOptions): Promise<PolyagentConfig> {
 	const now = new Date().toISOString();
 	const workingDirectory = path.resolve(options.workingDirectory);
 
@@ -44,17 +44,17 @@ export async function createConfig(options: InitOptions): Promise<PolycodeConfig
 	};
 }
 
-export async function saveConfig(config: PolycodeConfig): Promise<string> {
+export async function saveConfig(config: PolyagentConfig): Promise<string> {
 	const configPath = getConfigPath();
 	await mkdir(path.dirname(configPath), {recursive: true});
 	await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, {mode: 0o600});
 	return configPath;
 }
 
-export async function loadConfig(): Promise<PolycodeConfig | null> {
+export async function loadConfig(): Promise<PolyagentConfig | null> {
 	try {
 		const rawConfig = await readFile(getConfigPath(), 'utf8');
-		const config = JSON.parse(rawConfig) as PolycodeConfig;
+		const config = JSON.parse(rawConfig) as PolyagentConfig;
 
 		try {
 			decryptSecret(config.llm.apiKey);
@@ -72,7 +72,7 @@ export async function loadConfig(): Promise<PolycodeConfig | null> {
 	}
 }
 
-export function getConfigApiKey(config: PolycodeConfig): string {
+export function getConfigApiKey(config: PolyagentConfig): string {
 	try {
 		return decryptSecret(config.llm.apiKey);
 	} catch {
@@ -81,7 +81,7 @@ export function getConfigApiKey(config: PolycodeConfig): string {
 }
 
 export type InitializeConfigResult = {
-	config: PolycodeConfig;
+	config: PolyagentConfig;
 	configPath: string;
 	agentsFile: ScaffoldAgentsResult;
 };

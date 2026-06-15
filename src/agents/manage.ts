@@ -55,7 +55,7 @@ async function readExistingAgentsFile(workingDirectory: string): Promise<{filePa
 	const result = AgentsFileSchema.safeParse(parsed);
 
 	if (!result.success) {
-		throw new AgentConfigError(`Cannot update ${path.basename(filePath)} until it validates. Run polycode validate for details.`);
+		throw new AgentConfigError(`Cannot update ${path.basename(filePath)} until it validates. Run polyagent validate for details.`);
 	}
 
 	return {filePath, data: result.data};

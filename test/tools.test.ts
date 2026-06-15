@@ -31,18 +31,18 @@ function context(approvalMode: ToolContext['approvalMode'] = 'allow', overrides:
 }
 
 beforeEach(async () => {
-	originalApproval = process.env.POLYCODE_TOOL_APPROVAL;
+	originalApproval = process.env.POLYAGENT_TOOL_APPROVAL;
 	originalTavilyApiKey = process.env.TAVILY_API_KEY;
-	originalWebSearchProvider = process.env.POLYCODE_WEB_SEARCH_PROVIDER;
-	originalWebTimeout = process.env.POLYCODE_WEB_TIMEOUT_MS;
-	temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'polycode-tools-'));
+	originalWebSearchProvider = process.env.POLYAGENT_WEB_SEARCH_PROVIDER;
+	originalWebTimeout = process.env.POLYAGENT_WEB_TIMEOUT_MS;
+	temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'polyagent-tools-'));
 });
 
 afterEach(async () => {
 	if (originalApproval === undefined) {
-		delete process.env.POLYCODE_TOOL_APPROVAL;
+		delete process.env.POLYAGENT_TOOL_APPROVAL;
 	} else {
-		process.env.POLYCODE_TOOL_APPROVAL = originalApproval;
+		process.env.POLYAGENT_TOOL_APPROVAL = originalApproval;
 	}
 
 	if (originalTavilyApiKey === undefined) {
@@ -52,15 +52,15 @@ afterEach(async () => {
 	}
 
 	if (originalWebSearchProvider === undefined) {
-		delete process.env.POLYCODE_WEB_SEARCH_PROVIDER;
+		delete process.env.POLYAGENT_WEB_SEARCH_PROVIDER;
 	} else {
-		process.env.POLYCODE_WEB_SEARCH_PROVIDER = originalWebSearchProvider;
+		process.env.POLYAGENT_WEB_SEARCH_PROVIDER = originalWebSearchProvider;
 	}
 
 	if (originalWebTimeout === undefined) {
-		delete process.env.POLYCODE_WEB_TIMEOUT_MS;
+		delete process.env.POLYAGENT_WEB_TIMEOUT_MS;
 	} else {
-		process.env.POLYCODE_WEB_TIMEOUT_MS = originalWebTimeout;
+		process.env.POLYAGENT_WEB_TIMEOUT_MS = originalWebTimeout;
 	}
 
 	await rm(temporaryDirectory, {force: true, recursive: true});
@@ -134,14 +134,14 @@ describe('built-in tools', () => {
 	});
 
 	it('uses mocked web search output for deterministic tests', async () => {
-		process.env.POLYCODE_MOCK_WEB_SEARCH = 'Node.js LTS search result';
+		process.env.POLYAGENT_MOCK_WEB_SEARCH = 'Node.js LTS search result';
 
 		try {
 			const result = await getTool('web_search').execute({query: 'latest Node.js LTS', max_results: 3}, context());
 
 			expect(result.message).toContain('Node.js LTS');
 		} finally {
-			delete process.env.POLYCODE_MOCK_WEB_SEARCH;
+			delete process.env.POLYAGENT_MOCK_WEB_SEARCH;
 		}
 	});
 
@@ -170,11 +170,11 @@ describe('built-in tools', () => {
 	});
 
 	it('uses DuckDuckGo no-key search with injected fetch', async () => {
-		const result = await getTool('web_search').execute({query: 'polycode', max_results: 2}, context('allow', {
+		const result = await getTool('web_search').execute({query: 'polyagent', max_results: 2}, context('allow', {
 			webSearchProvider: 'duckduckgo',
 			fetch: async () => new Response(JSON.stringify({
-				AbstractText: 'Polycode summary',
-				AbstractURL: 'https://example.com/polycode',
+				AbstractText: 'Polyagent summary',
+				AbstractURL: 'https://example.com/polyagent',
 				RelatedTopics: [
 					{Text: 'First related topic', FirstURL: 'https://example.com/1'}
 				]
@@ -182,7 +182,7 @@ describe('built-in tools', () => {
 		}));
 
 		expect(result.ok).toBe(true);
-		expect(result.message).toContain('Polycode summary');
+		expect(result.message).toContain('Polyagent summary');
 		expect(result.message).toContain('First related topic');
 	});
 
@@ -292,7 +292,7 @@ describe('built-in tools', () => {
 				throw new Error('network unavailable');
 			}
 		}));
-		const searchNetworkResult = await getTool('web_search').execute({query: 'polycode', max_results: 1}, context('allow', {
+		const searchNetworkResult = await getTool('web_search').execute({query: 'polyagent', max_results: 1}, context('allow', {
 			webSearchProvider: 'duckduckgo',
 			fetch: async () => {
 				throw new Error('offline');
@@ -308,7 +308,7 @@ describe('built-in tools', () => {
 	});
 
 	it('times out slow web requests instead of hanging the run', async () => {
-		process.env.POLYCODE_WEB_TIMEOUT_MS = '5';
+		process.env.POLYAGENT_WEB_TIMEOUT_MS = '5';
 
 		const result = await getTool('fetch_url').execute({url: 'https://example.com'}, context('allow', {
 			fetch: async () => new Promise<Response>(() => {})

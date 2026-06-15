@@ -1,6 +1,6 @@
 import type {AgentDefinition} from '../agents/schema.js';
 import type {LlmClient} from '../chat/run.js';
-import type {PolycodeConfig} from '../domain.js';
+import type {PolyagentConfig} from '../domain.js';
 import {throwIfAborted} from '../runtime/cancellation.js';
 import type {MultiAgentPlan, MultiAgentPlanStep} from './planner.js';
 
@@ -32,7 +32,7 @@ export type DebateOutcome = {
 export type DebateOptions = {
 	plan: MultiAgentPlan;
 	task: string;
-	config: PolycodeConfig;
+	config: PolyagentConfig;
 	llmClient: LlmClient;
 	agents?: AgentDefinition[];
 	callbacks?: {
@@ -84,7 +84,7 @@ function formatTranscript(messages: DebateMessage[]): string {
 }
 
 async function collectVirtualAgentOutput(options: {
-	config: PolycodeConfig;
+	config: PolyagentConfig;
 	llmClient: LlmClient;
 	agent: AgentDefinition;
 	system: string;

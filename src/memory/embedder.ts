@@ -60,11 +60,11 @@ export class FallbackEmbedder implements Embedder {
 }
 
 export function createEmbedder(): Embedder {
-	if (process.env.POLYCODE_EMBEDDINGS === 'hash') {
+	if (process.env.POLYAGENT_EMBEDDINGS === 'hash') {
 		return new HashEmbedder();
 	}
 
-	if (process.env.POLYCODE_EMBEDDINGS === 'transformers') {
+	if (process.env.POLYAGENT_EMBEDDINGS === 'transformers') {
 		return new TransformersEmbedder();
 	}
 

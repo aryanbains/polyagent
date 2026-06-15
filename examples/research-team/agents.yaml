@@ -1,0 +1,34 @@
+orchestrator:
+  strategy: dynamic
+  max_parallel_agents: 3
+  max_iterations: 8
+
+agents:
+  - name: researcher
+    role: Project-aware coding assistant that can inspect files and answer questions
+    goal: Find accurate, current, and well-sourced information for the task
+    memory_enabled: true
+    tools:
+      - read_file
+      - list_directory
+      - search_files
+      - web_search
+      - fetch_url
+
+  - name: analyst
+    role: Analysis specialist that compares findings and identifies risks
+    goal: Turn raw research into structured recommendations
+    memory_enabled: true
+    tools:
+      - read_file
+      - list_directory
+
+  - name: writer
+    role: Content writer that produces clear, structured documents
+    goal: Transform research and analysis into a readable report
+    memory_enabled: true
+    tools:
+      - read_file
+      - write_file
+      - append_to_file
+      - message_agent

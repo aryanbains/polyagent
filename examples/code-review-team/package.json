@@ -1,0 +1,7 @@
+{
+	"name": "polyagent-code-review-team",
+	"version": "0.1.0",
+	"description": "Coder + reviewer + tester pipeline with debate and replanning enabled.",
+	"type": "module",
+	"private": true
+}

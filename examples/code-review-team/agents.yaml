@@ -1,0 +1,37 @@
+orchestrator:
+  strategy: plan_and_execute
+  max_parallel_agents: 2
+  max_iterations: 6
+
+agents:
+  - name: coder
+    role: Senior TypeScript engineer
+    goal: Write correct, idiomatic, well-tested TypeScript code
+    memory_enabled: true
+    tools:
+      - read_file
+      - write_file
+      - append_to_file
+      - list_directory
+      - search_files
+      - execute_command
+
+  - name: reviewer
+    role: Strict code reviewer
+    goal: Find bugs, edge cases, and missed tests in proposed code
+    memory_enabled: true
+    tools:
+      - read_file
+      - search_files
+      - message_agent
+
+  - name: tester
+    role: Test author
+    goal: Write unit tests that cover the new behavior
+    memory_enabled: true
+    tools:
+      - read_file
+      - write_file
+      - append_to_file
+      - execute_command
+      - message_agent

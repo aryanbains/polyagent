@@ -26,7 +26,7 @@ function context(overrides: Partial<ToolContext> = {}): ToolContext {
 }
 
 beforeEach(async () => {
-	workspace = await mkdtemp(path.join(os.tmpdir(), 'polycode-phase35-'));
+	workspace = await mkdtemp(path.join(os.tmpdir(), 'polyagent-phase35-'));
 	await writeFile(path.join(workspace, 'package.json'), JSON.stringify({
 		name: 'demo',
 		dependencies: {
@@ -78,10 +78,10 @@ describe('Phase 3.5 golden path regressions', () => {
 	});
 
 	it('fetches docs from the web using no-key search and URL fetch', async () => {
-		const search = await getTool('web_search').execute({query: 'Polycode docs', max_results: 2}, context({
+		const search = await getTool('web_search').execute({query: 'Polyagent docs', max_results: 2}, context({
 			webSearchProvider: 'duckduckgo',
 			fetch: async () => new Response(JSON.stringify({
-				AbstractText: 'Polycode documentation',
+				AbstractText: 'Polyagent documentation',
 				AbstractURL: 'https://example.com/docs'
 			}), {status: 200})
 		}));
@@ -95,7 +95,7 @@ describe('Phase 3.5 golden path regressions', () => {
 		}));
 
 		expect(search.ok).toBe(true);
-		expect(search.message).toContain('Polycode documentation');
+		expect(search.message).toContain('Polyagent documentation');
 		expect(page.ok).toBe(true);
 		expect(page.message).toContain('Install with npm.');
 	});

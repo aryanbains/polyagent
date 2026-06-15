@@ -6,19 +6,19 @@ import {decryptSecret} from '../src/config/crypto.js';
 import {getConfigPath, initializeConfig, loadConfig} from '../src/config/store.js';
 
 let temporaryHome = '';
-let originalPolycodeHome: string | undefined;
+let originalPolyagentHome: string | undefined;
 
 beforeEach(async () => {
-	originalPolycodeHome = process.env.POLYCODE_HOME;
-	temporaryHome = await mkdtemp(path.join(os.tmpdir(), 'polycode-config-'));
-	process.env.POLYCODE_HOME = temporaryHome;
+	originalPolyagentHome = process.env.POLYAGENT_HOME;
+	temporaryHome = await mkdtemp(path.join(os.tmpdir(), 'polyagent-config-'));
+	process.env.POLYAGENT_HOME = temporaryHome;
 });
 
 afterEach(async () => {
-	if (originalPolycodeHome === undefined) {
-		delete process.env.POLYCODE_HOME;
+	if (originalPolyagentHome === undefined) {
+		delete process.env.POLYAGENT_HOME;
 	} else {
-		process.env.POLYCODE_HOME = originalPolycodeHome;
+		process.env.POLYAGENT_HOME = originalPolyagentHome;
 	}
 
 	await rm(temporaryHome, {force: true, recursive: true});
@@ -87,6 +87,6 @@ describe('config store', () => {
 		config.llm.apiKey.tag = Buffer.alloc(16).toString('base64');
 		await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
 
-		await expect(loadConfig()).rejects.toThrow('API key could not be decrypted. Run polycode init to reconfigure.');
+		await expect(loadConfig()).rejects.toThrow('API key could not be decrypted. Run polyagent init to reconfigure.');
 	});
 });

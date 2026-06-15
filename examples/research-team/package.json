@@ -1,0 +1,7 @@
+{
+	"name": "polyagent-research-team",
+	"version": "0.1.0",
+	"description": "Three-agent research team example: gather sources, analyze, then write a report.",
+	"type": "module",
+	"private": true
+}

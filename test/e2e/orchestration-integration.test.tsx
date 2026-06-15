@@ -7,7 +7,7 @@ import {cleanup, render} from 'ink-testing-library';
 import {afterEach, beforeEach, describe, expect, it} from 'vitest';
 import type {AgentDefinition, OrchestratorConfig} from '../../src/agents/schema.js';
 import type {LlmClient, LlmStreamOptions} from '../../src/chat/run.js';
-import type {PolycodeConfig} from '../../src/domain.js';
+import type {PolyagentConfig} from '../../src/domain.js';
 import type {MultiAgentPlan} from '../../src/orchestration/planner.js';
 import {loadRecordedSession} from '../../src/orchestration/session-recorder.js';
 import {runMultiAgentTask} from '../../src/orchestration/run.js';
@@ -52,7 +52,7 @@ const basePlan: MultiAgentPlan = {
 	]
 };
 
-function config(): PolycodeConfig {
+function config(): PolyagentConfig {
 	return {
 		version: 1,
 		project: {
@@ -108,7 +108,7 @@ class IntegrationLlmClient implements LlmClient {
 }
 
 beforeEach(async () => {
-	workspace = await mkdtemp(path.join(os.tmpdir(), 'polycode-integration-'));
+	workspace = await mkdtemp(path.join(os.tmpdir(), 'polyagent-integration-'));
 });
 
 afterEach(async () => {

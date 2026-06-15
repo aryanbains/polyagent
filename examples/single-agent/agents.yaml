@@ -1,0 +1,18 @@
+orchestrator:
+  strategy: react
+  max_parallel_agents: 1
+  max_iterations: 10
+
+agents:
+  - name: helper
+    role: Single-agent personal assistant
+    goal: Help the user with whatever they ask
+    memory_enabled: true
+    tools:
+      - read_file
+      - write_file
+      - list_directory
+      - search_files
+      - web_search
+      - fetch_url
+      - message_agent

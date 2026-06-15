@@ -4,7 +4,7 @@ import type {MemorySearchResult, MemoryStats, MemoryStore} from './types.js';
 
 export class ChromaUnavailableError extends Error {
 	constructor(endpoint = 'http://localhost:8000') {
-		const message = `ChromaDB is not reachable at ${endpoint}. Start ChromaDB or run polycode init --memory skip to disable memory.`;
+		const message = `ChromaDB is not reachable at ${endpoint}. Start ChromaDB or run polyagent init --memory skip to disable memory.`;
 		super(message);
 		this.name = 'ChromaUnavailableError';
 	}
@@ -21,7 +21,7 @@ export class ChromaMemoryStore implements MemoryStore {
 	private readonly endpoint: string;
 
 	constructor(
-		private readonly collectionName = 'polycode_memory',
+		private readonly collectionName = 'polyagent_memory',
 		private readonly embedder: Embedder = createEmbedder()
 	) {
 		const host = process.env.CHROMA_HOST ?? 'localhost';

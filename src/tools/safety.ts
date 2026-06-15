@@ -43,7 +43,7 @@ export function createUnifiedDiff(filePath: string, before: string, after: strin
 }
 
 function approvalFromEnvironment(): ToolApprovalMode | null {
-	const value = process.env.POLYCODE_TOOL_APPROVAL?.toLowerCase();
+	const value = process.env.POLYAGENT_TOOL_APPROVAL?.toLowerCase();
 
 	if (value === 'allow' || value === 'yes' || value === 'true') {
 		return 'allow';

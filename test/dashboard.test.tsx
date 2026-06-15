@@ -2,10 +2,10 @@ import React from 'react';
 import {cleanup, render} from 'ink-testing-library';
 import {afterEach, describe, expect, it} from 'vitest';
 import {Dashboard} from '../src/ui/Dashboard.js';
-import type {PolycodeConfig} from '../src/domain.js';
+import type {PolyagentConfig} from '../src/domain.js';
 import type {AgentDefinition} from '../src/agents/schema.js';
 
-const config: PolycodeConfig = {
+const config: PolyagentConfig = {
 	version: 1,
 	project: {
 		name: 'Demo',
@@ -40,8 +40,8 @@ describe('Dashboard', () => {
 	it('shows first-run guidance when no config exists', () => {
 		const {lastFrame} = render(<Dashboard agents={[]} config={null} version="0.1.0" />);
 
-		expect(lastFrame()).toContain('Polycode needs setup');
-		expect(lastFrame()).toContain('polycode init');
+		expect(lastFrame()).toContain('Polyagent needs setup');
+		expect(lastFrame()).toContain('polyagent init');
 		expect(lastFrame()).toContain('Config path checked');
 		expect(lastFrame()).toContain('Setup needed');
 	});
@@ -64,7 +64,7 @@ describe('Dashboard', () => {
 			status: 'ready'
 		}} version="0.1.0" />);
 
-		expect(lastFrame()).toContain('Polycode v0.1.0');
+		expect(lastFrame()).toContain('Polyagent v0.1.0');
 		expect(lastFrame()).toContain('Agents');
 		expect(lastFrame()).toContain('[R] researcher');
 		expect(lastFrame()).toContain('idle | 1 tools');

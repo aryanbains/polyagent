@@ -8,7 +8,7 @@ import {upsertAgentDefinition} from '../src/agents/manage.js';
 let temporaryDirectory = '';
 
 beforeEach(async () => {
-	temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'polycode-agents-'));
+	temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'polyagent-agents-'));
 });
 
 afterEach(async () => {

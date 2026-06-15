@@ -2,7 +2,7 @@ import {describe, expect, it} from 'vitest';
 import type {AgentDefinition} from '../src/agents/schema.js';
 import {AiSdkLlmClient, LlmCallError, runAgentTurn, type LlmClient, type LlmStreamOptions} from '../src/chat/run.js';
 import {buildSystemPrompt} from '../src/chat/system-prompt.js';
-import type {PolycodeConfig} from '../src/domain.js';
+import type {PolyagentConfig} from '../src/domain.js';
 import {LocalVectorMemoryStore} from '../src/memory/local-store.js';
 import {HashEmbedder} from '../src/memory/embedder.js';
 import {createExecutionSession} from '../src/runtime/execution.js';
@@ -18,7 +18,7 @@ const agent: AgentDefinition = {
 	memory_enabled: true
 };
 
-const config: PolycodeConfig = {
+const config: PolyagentConfig = {
 	version: 1,
 	project: {
 		name: 'Demo',
@@ -59,8 +59,8 @@ describe('runAgentTurn', () => {
 	});
 
 	it('stores exchanges and injects relevant memory on later turns', async () => {
-		const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'polycode-chat-'));
-		const memoryStore = new LocalVectorMemoryStore(path.join(temporaryDirectory, '.polycode', 'memory.json'), new HashEmbedder());
+		const temporaryDirectory = await mkdtemp(path.join(os.tmpdir(), 'polyagent-chat-'));
+		const memoryStore = new LocalVectorMemoryStore(path.join(temporaryDirectory, '.polyagent', 'memory.json'), new HashEmbedder());
 		const llmClient = new RecordingLlmClient();
 
 		try {

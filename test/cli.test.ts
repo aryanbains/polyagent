@@ -6,7 +6,7 @@ describe('cli module', () => {
 	it('can be imported without executing the program', () => {
 		const program = buildProgram();
 
-		expect(program.name()).toBe('polycode');
+		expect(program.name()).toBe('polyagent');
 	});
 
 	it('detects direct execution through resolved file paths', () => {

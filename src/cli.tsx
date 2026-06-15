@@ -339,7 +339,7 @@ async function runTask(task: string, options: RunCommandOptions): Promise<void> 
 	const agent = options.agent === undefined ? agents[0] : findAgent(agents, options.agent);
 
 	if (agent === undefined) {
-		throw new Error('No agents are configured. Create agents.yaml and run polycode validate.');
+		throw new Error('No agents are configured. Create agents.yaml and run polyagent validate.');
 	}
 
 	await runAgentTurn({
@@ -522,7 +522,7 @@ export function buildProgram(): Command {
 	program
 		.command('replay')
 		.description('Replay a recorded multi-agent session.')
-		.argument('<session-id-or-path>', 'Session id from .polycode/sessions, or a JSON file path.')
+		.argument('<session-id-or-path>', 'Session id from .polyagent/sessions, or a JSON file path.')
 		.option('--speed <number>', 'Replay speed multiplier.', '1')
 		.action(async (sessionId: string, options: ReplayCommandOptions) => {
 			await runReplay(sessionId, options);
