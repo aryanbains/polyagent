@@ -5,6 +5,12 @@ All notable changes to Polyagent will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-06-15
+
+### Added
+- `repository`, `homepage`, and `bugs` fields in `package.json` so the npm page links to [github.com/aryanbains/polyagent](https://github.com/aryanbains/polyagent).
+- Project repository: [github.com/aryanbains/polyagent](https://github.com/aryanbains/polyagent).
+
 ## [0.1.0] - 2026-06-15
 
 ### Added
